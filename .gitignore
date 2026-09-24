@@ -1,0 +1,88 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.crewai/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and packaging
+.venv/
+venv/
+env/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Node and Vite
+node_modules/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Flask and local runtime state
+.flaskenv
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
+*.backup
+
+# Secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials*.json
+service-account*.json
+
+# Participant uploads, payment evidence and generated documents
+uploads/
+evidence/
+payment-screenshots/
+generated/
+generated-documents/
+generated-pdfs/
+backend/data/private/
+backend/data/backups/
+backend/data/uploads/
+backend/data/exports/
+backend/data/email-queue/
+private-data/
+customer-data/
+
+# Generated archives and spreadsheets
+*.zip
+*.xls
+*.xlsx
+*.pdf
+!docs/source-materials/proposal/SpecDrivenDevelopment.pdf
+
+# Logs, queues and temporary files
+*.log
+logs/
+tmp/
+temp/
+test-output/
+celerybeat-schedule*
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+Desktop.ini
+~$*
+/chatbot_transfer.zip

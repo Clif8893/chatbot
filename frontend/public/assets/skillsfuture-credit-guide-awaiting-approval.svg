@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-labelledby="title description">
+  <title id="title">Updated SkillsFuture credit guide awaiting approval</title>
+  <description id="description">The supplied image refers to a top-up expiry date of 31 December 2025 and is awaiting replacement or approval by the client.</description>
+  <rect width="960" height="540" fill="#f4f8f5"/>
+  <rect x="48" y="48" width="864" height="444" rx="28" fill="#ffffff" stroke="#007a61" stroke-width="4"/>
+  <circle cx="120" cy="124" r="42" fill="none" stroke="#df1f26" stroke-width="18"/>
+  <path d="M120 82a42 42 0 0 1 42 42" fill="none" stroke="#00a9c7" stroke-width="18"/>
+  <text x="190" y="112" fill="#06483d" font-family="Arial, sans-serif" font-size="30" font-weight="700">SkillsFuture credit guide</text>
+  <text x="190" y="151" fill="#49645d" font-family="Arial, sans-serif" font-size="22">Updated client-approved image pending</text>
+  <line x1="88" y1="195" x2="872" y2="195" stroke="#d5e3dc" stroke-width="2"/>
+  <text x="88" y="250" fill="#17352f" font-family="Arial, sans-serif" font-size="25" font-weight="700">Please rely on the approved written answer above.</text>
+  <text x="88" y="301" fill="#526b64" font-family="Arial, sans-serif" font-size="21">The supplied graphic states that a one-off top-up expired on</text>
+  <text x="88" y="338" fill="#9c2424" font-family="Arial, sans-serif" font-size="24" font-weight="700">31 December 2025</text>
+  <text x="88" y="384" fill="#526b64" font-family="Arial, sans-serif" font-size="21">It has not been published as current guidance.</text>
+  <rect x="88" y="424" width="526" height="44" rx="22" fill="#e3f1eb"/>
+  <text x="111" y="454" fill="#006c5b" font-family="Arial, sans-serif" font-size="19" font-weight="700">Awaiting updated client-approved image</text>
+</svg>

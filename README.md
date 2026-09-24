@@ -1,93 +1,137 @@
-# QM_Agentic_Course_Agent
+# Q&M Agentic Course Agent
 
+This branch contains Dhiraj's working Q&M Training enquiry and enrollment prototype. A React/Vite portal calls a Flask API; CrewAI coordinates intent classification, grounded FAQ replies and enrollment extraction, while deterministic Python validates and persists enrollment state.
 
+The repository was integrated on top of the GitLab `main` history. Credentials, participant records, runtime databases, generated invoices and private company attachments are intentionally not included.
 
-## Getting started
+## Implemented agents and workflow
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- **Intent Classification Agent** routes natural enquiries to FAQ, enrollment or general handling.
+- **FAQ/Enquiry Agent** answers from `backend/data/course_information.json` and avoids inventing dates, venues, funding rules or payment details.
+- **Enrollment Agent** extracts the nine enrollment fields. Deterministic services then validate NRIC/FIN checksum, age, contact details, intake, payment allocation, duplicates and capacity.
+- Conversation and draft state are persisted so signed-in participants can resume safely. Confirmed users can check status and request changes, rescheduling, cancellation or an invoice resend.
+- Participant sessions own their conversations. Staff operations and accounting routes use separate role-protected sessions.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+The two prototype courses are:
 
-## Add your files
+| Course | Fee | Schedule | Payment rules |
+|---|---:|---|---|
+| 2-Day Basic Certificate in Dental Assisting | S$600 nett | Two consecutive days, 9:30am-5:30pm | PayNow or basic-tier SkillsFuture plus PayNow remainder; Mid-Career SkillsFuture is excluded; UTAP is reimbursement-only |
+| 1-Day Dental Infection Control & Sterilisation Workshop | S$350 nett | One day, 9:30am-5:30pm | Full PayNow only; SkillsFuture and UTAP are unavailable |
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+The included intake dates are fictional development data. They are enabled only by `ENABLE_DEMO_INTAKES=true`, are disabled in production, and are not approved Q&M intake dates.
 
+## Project layout
+
+| Path | Purpose |
+|---|---|
+| `backend/agents/` | Three CrewAI agent definitions and structured output models |
+| `backend/tools/` | Read-only course, memory, draft, validation and intake tools |
+| `backend/services/` | Routing, validation, persistence, enrollment management, invoices and delivery |
+| `backend/models/` | SQLAlchemy account, conversation, enrollment, finance and operations models |
+| `backend/data/course_information.json` | Structured course and approved reply information |
+| `backend/tests/` | Mocked backend and regression tests |
+| `frontend/src/` | Participant chat and protected staff portal |
+| `docs/` | Requirements, templates and privacy-safe reference material |
+| `ENROLLMENT_OVERVIEW.md` | Concise enrollment architecture and verification guide |
+
+## Requirements
+
+- Python 3.10 or newer (verified with Python 3.10.11)
+- Node.js 20 or newer and npm (verified with Node.js 24.15.0)
+- Microsoft Excel on Windows only if Excel-to-PDF invoice conversion is enabled
+- An OpenAI API key for live CrewAI replies; tests mock this boundary
+
+## Clone this branch
+
+```powershell
+git clone https://gitlab.com/nyp-sg/fyp/2026-p3/qm_agentic_course_agent.git
+Set-Location qm_agentic_course_agent
+git checkout feature/dhiraj-enrollment-agent
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/nyp-sg/fyp/2026-p3/qm_agentic_course_agent.git
-git branch -M main
-git push -uf origin main
+
+## Backend setup
+
+From the project root in PowerShell:
+
+```powershell
+python -m venv backend\.venv
+.\backend\.venv\Scripts\Activate.ps1
+python -m pip install -r backend\requirements.txt
+Copy-Item backend\.env.example backend\.env
+python -m flask --app backend.app run --debug --port 5000
 ```
 
-## Integrate with your tools
+Edit only the ignored `backend/.env`. At minimum, set `OPENAI_API_KEY` for live chatbot calls and replace `FLASK_SECRET_KEY` with a private value. The default SQLite URL creates `backend/data/qm_chatbot.db`; table creation and additive migrations run at application startup.
 
-* [Set up project integrations](https://gitlab.com/nyp-sg/fyp/2026-p3/qm_agentic_course_agent/-/settings/integrations)
+Important development settings are documented in `backend/.env.example`. Keep email disabled unless an authorised SMTP account and recipient have been configured:
 
-## Collaborate with your team
+```dotenv
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+DATABASE_URL=sqlite:///data/qm_chatbot.db
+FLASK_SECRET_KEY=
+EMAIL_DELIVERY_ENABLED=false
+SMTP_USERNAME=
+SMTP_PASSWORD=
+EMAIL_LIVE_TEST_ENABLED=false
+EMAIL_TEST_RECIPIENT=
+```
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+No API key, Gmail app password, Flask secret or production account is supplied in Git.
 
-## Test and Deploy
+## Frontend setup
 
-Use the built-in continuous integration in GitLab.
+In a second PowerShell terminal:
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```powershell
+Set-Location frontend
+npm install
+Copy-Item .env.example .env
+npm run dev
+```
 
-***
+Open `http://127.0.0.1:5173`. The backend runs at `http://127.0.0.1:5000`; `GET /health` is the health check.
 
-# Editing this README
+Participants create their own local account from the registration page. There is no committed staff password. To make a local-only staff account, generate a password hash without putting the plaintext password in Git:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```powershell
+$hash = python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('choose-a-local-password'))"
+$account = @{ teststaff = @{ password_hash = $hash; role = 'admin' } } | ConvertTo-Json -Compress
+(Get-Content backend\.env) -replace '^STAFF_ACCOUNTS_JSON=.*$', "STAFF_ACCOUNTS_JSON=$account" | Set-Content backend\.env
+```
 
-## Suggestions for a good README
+Restart the backend, then sign in at `/staff` with username `teststaff` and the local password chosen above. Use `operations`, `accounting` or `admin` as the role appropriate to the test. The ignored `.env` must never be committed.
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## Tests and build
 
-## Name
-Choose a self-explaining name for your project.
+Normal backend tests mock CrewAI/OpenAI and do not make real provider calls:
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest backend\tests -q
+Set-Location frontend
+npm test
+npm run build
+```
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Branch-preparation verification completed with **22/22 targeted backend tests** and **16/16 frontend tests** passing. The targeted backend set covers both course workflows, status/context resolution, confirmed changes, rescheduling, cancellation and invoice download. Python compilation and the Vite production build also passed. No live OpenAI or SMTP call was made.
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+## Invoice and email limitations
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+- Master Invoice workbooks and PDF invoices are generated under `backend/data/private/`; that directory is ignored.
+- Excel export uses deterministic database data. PDF conversion relies on Microsoft Excel/COM on Windows.
+- `INVOICE_TEMPLATE_APPROVED` defaults to `false`. Customer PDF delivery must remain blocked until Q&M approves the template wording and supplies the private source workbook.
+- Invoice numbering uses the configurable `DEMO-INV` development prefix pending Q&M approval.
+- Email uses a database-backed outbox. Delivery is disabled by default and requires local SMTP credentials; failures do not undo enrollment or invoice records.
+- Company workflow/reply attachments used during development are not in this branch because they contain private contact or business material. Runtime operation uses the checked-in structured course-information file.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+## Documentation
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+- [Enrollment overview](ENROLLMENT_OVERVIEW.md)
+- [Active requirements](docs/requirements/Cliftons-Requirements.md)
+- [Requirements template](docs/templates/requirements-template.md)
+- [Design template](docs/templates/design-template.md)
+- [Tasks template](docs/templates/tasks-template.md)
+- [Spec-Driven Development reference](docs/source-materials/proposal/SpecDrivenDevelopment.pdf)
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Source documents excluded for privacy remain only in the original local project and are not required to start the application.

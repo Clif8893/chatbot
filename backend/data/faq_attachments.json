@@ -1,0 +1,12 @@
+{
+  "skillsfuture_credit_guide": {
+    "trigger_topics": [
+      "SkillsFuture",
+      "Mid-Career SkillsFuture"
+    ],
+    "image_url": "/assets/skillsfuture-credit-guide-awaiting-approval.svg",
+    "image_alt": "SkillsFuture credit tier guide placeholder awaiting an updated client-approved image because the supplied graphic states that a top-up expired on 31 December 2025.",
+    "image_status": "awaiting_updated_client_approval",
+    "review_note": "The supplied explanation graphic contains a one-off top-up expiry date of 31 December 2025. Do not replace this placeholder until the client supplies or approves an updated image."
+  }
+}

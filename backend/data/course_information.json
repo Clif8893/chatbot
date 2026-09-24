@@ -1,0 +1,300 @@
+{
+  "content_status": {
+    "last_reviewed": "2026-09-15",
+    "source_priority": [
+      "company reply information",
+      "latest explicit company workflow or email instruction",
+      "Clifton's requirements"
+    ],
+    "conflicts": {
+      "venue": "The course reply template says our HQ at Clementi Loop, while workflow examples show the Q&M Dental Centre auditorium at 180 Kitchener Road and an email signature lists the head office at IMM Building. The exact venue must be confirmed for each intake.",
+      "intake_dates": "Dates shown in the supplied reply and workflow examples are historical. Only dates in the current intakes list may be offered.",
+      "lead_follow_up_timing": "The presentation shows 30 minutes, one day and two days; the later company email instructs three attempts at two-day intervals. This is outside the current chatbot reply flow."
+    }
+  },
+  "reply_style": {
+    "tone": "Warm, helpful and natural",
+    "language": "Concise Singapore/British English",
+    "emoji_guidance": "Use relevant emojis sparingly in friendly headings and closings. Do not use emojis in NRIC displays, validation errors, payment discrepancies, privacy warnings or other sensitive messages.",
+    "staff_confirmation_message": "I’m sorry, I don’t have confirmed information about that at the moment. Our team will need to confirm it for you."
+  },
+  "course": {
+    "id": "dental-assisting-basic",
+    "code": "BCDA-2D",
+    "name": "2-Day Basic Certificate in Dental Assisting",
+    "overview": "This beginner-friendly, practical course introduces essential dental-assisting skills, including recognising dental instruments and materials, infection control, and anticipating a dentist’s needs during procedures.",
+    "content_topics": [
+      "recognising dental instruments and materials",
+      "infection control",
+      "anticipating a dentist’s needs during procedures"
+    ],
+    "fee": {
+      "amount": 600,
+      "currency": "SGD",
+      "display": "S$600 nett",
+      "value_guidance": "The fee includes the course materials, expert instruction, and access to specialised equipment and facilities."
+    },
+    "duration": "two consecutive training days",
+    "training_time": "9:30am-5:30pm on each training day",
+    "venue": {
+      "reply_template_wording": "our HQ at Clementi Loop",
+      "confirmation_required": true,
+      "customer_reply": "The exact training venue will be confirmed by the Q&M Training team."
+    },
+    "website": "https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting",
+    "intakes": [],
+    "demo_intakes": [
+      {
+        "id": "demo-2026-10-10",
+        "course_id": "dental-assisting-basic",
+        "start_date": "2026-10-10",
+        "end_date": "2026-10-11",
+        "start_time": "09:30",
+        "end_time": "17:30",
+        "intake_type": "Weekend",
+        "display_date": "10–11 October 2026",
+        "capacity": 20,
+        "participant_count": 0,
+        "status": "open",
+        "is_demo": true
+      },
+      {
+        "id": "demo-2026-11-04",
+        "course_id": "dental-assisting-basic",
+        "start_date": "2026-11-04",
+        "end_date": "2026-11-05",
+        "start_time": "09:30",
+        "end_time": "17:30",
+        "intake_type": "Weekday",
+        "display_date": "4–5 November 2026",
+        "capacity": 20,
+        "participant_count": 0,
+        "status": "open",
+        "is_demo": true
+      },
+      {
+        "id": "demo-2026-11-21",
+        "course_id": "dental-assisting-basic",
+        "start_date": "2026-11-21",
+        "end_date": "2026-11-22",
+        "start_time": "09:30",
+        "end_time": "17:30",
+        "intake_type": "Weekend",
+        "display_date": "21–22 November 2026",
+        "capacity": 20,
+        "participant_count": 0,
+        "status": "open",
+        "is_demo": true
+      }
+    ],
+    "demo_intake_notice": "Demo intake dates — prototype only. These are fictional dates and must be confirmed by staff before a real booking.",
+    "no_intakes_message": "Our upcoming course dates are being updated. Please leave your contact details, and our team will confirm the available dates with you.",
+    "skillsfuture": {
+      "basic_tier_accepted": true,
+      "mid_career_tier_accepted": false,
+      "claim_page": "https://sfc.myskillsfuture.gov.sg/claim",
+      "customer_reply": "You may use basic-tier SkillsFuture Credits for this course. Mid-Career SkillsFuture Credits cannot be used. Please check your basic-tier balance on the SkillsFuture portal and tell us how much you intend to use. You will need to submit your own claim.",
+      "invoice_guidance": "After receiving the required enrolment and payment details, the team will prepare an invoice and email the participant the SkillsFuture claim steps."
+    },
+    "paynow": {
+      "accepted": true,
+      "uen": "201841969G",
+      "customer_reply": "PayNow is accepted using UEN 201841969G. If you are also using basic-tier SkillsFuture Credits, please state the SkillsFuture amount and the remaining PayNow amount."
+    },
+    "utap": {
+      "available_to": "eligible NTUC Union members",
+      "support": "50% of the unfunded course fee, up to S$250 per year or S$500 per year for NTUC members aged 40 and above",
+      "rules": [
+        "The participant must have a valid NTUC Union membership.",
+        "The participant must pay the course fee upfront.",
+        "The participant must attend both training days.",
+        "The claim must be submitted within six months after course completion.",
+        "Proof of payment and proof of completion are required.",
+        "UTAP and SkillsFuture Credits cannot be combined for the same course fee."
+      ],
+      "claim_steps": [
+        "Check that the NTUC Union membership is valid.",
+        "Enrol, pay the course fee upfront, and attend both training days.",
+        "After completing the course, log in to the NTUC U Portal and submit the UTAP claim.",
+        "Upload proof of payment and proof of completion.",
+        "Submit the claim within six months after course completion."
+      ],
+      "membership_help": "https://ntuc.co/chat",
+      "portal": "https://www.ntuc.org.sg",
+      "customer_reply": "Eligible NTUC Union members may claim 50% of the unfunded course fee, capped at S$250 per year or S$500 per year for members aged 40 and above. You must pay upfront, attend both training days, and submit your claim through the NTUC U Portal within six months after completion with proof of payment and completion. UTAP cannot be combined with SkillsFuture Credits."
+    },
+    "minimum_qualification": "GCE N Levels are preferred. Applicants without GCE N Levels may still be considered if they have basic English reading and writing skills, as the assessment is conducted in English.",
+    "employment": {
+      "opportunity_timing": "Suitable candidates may be considered for job opportunities on the last day of the class.",
+      "selection_factors": [
+        "work location",
+        "schedule",
+        "skills and experience",
+        "cultural fit",
+        "interview performance"
+      ],
+      "guaranteed": false,
+      "customer_reply": "Q&M may consider suitable candidates for job opportunities on the last day of the class. Selection depends on factors such as work location, schedule, skills and experience, cultural fit, and interview performance, so employment is not guaranteed."
+    },
+    "enrollment": {
+      "required_information": [
+        "selected intake date when available",
+        "full name as shown on NRIC",
+        "NRIC",
+        "date of birth",
+        "email address",
+        "mobile number",
+        "payment method",
+        "SkillsFuture amount",
+        "PayNow amount"
+      ],
+      "payment_options": [
+        "PayNow",
+        "basic-tier SkillsFuture Credits with any remainder through PayNow",
+        "UTAP reimbursement after upfront payment and course completion"
+      ],
+      "payment_question": "Which payment option would you like to use: PayNow, basic-tier SkillsFuture Credits with any PayNow remainder, or UTAP reimbursement?",
+      "customer_reply": "To enrol, please send the requested participant, intake and payment information in one message where possible. Any missing or invalid details will be requested without asking you to repeat valid information.",
+      "invoice_guidance": "After the required details are received, the team will prepare an invoice and email the participant the relevant payment or SkillsFuture claim instructions.",
+      "payment_evidence": "Payment screenshots may be sent through email or WhatsApp. Email is the preferred channel.",
+      "field_labels": {
+        "full_name": "Full name as shown on NRIC",
+        "nric": "NRIC/FIN",
+        "date_of_birth": "Date of birth",
+        "email": "Email address",
+        "preferred_intake_date": "Preferred course intake/date",
+        "mobile_number": "Mobile number",
+        "payment_method": "Payment method",
+        "skillsfuture_amount": "SkillsFuture amount",
+        "paynow_amount": "PayNow amount",
+        "payment_allocation": "Payment allocation",
+        "course_fee": "Course fee"
+      },
+      "reply_templates": {
+        "course_selection": "Here is the course currently available:\n\n**{course_name}**{course_code_line}\n\n- Course fee: {course_fee}\n- Duration: {duration}\n- Available intake: {intake}\n- SkillsFuture eligibility: {skillsfuture}\n\nWould you like to enrol in this course?",
+        "course_fee_unavailable": "The approved fee for the selected course is not available in the current course information. Staff must confirm the fee before payment details can be collected.",
+        "intake_selection": "{demo_heading}📅 Available Intake Dates\n\n{intake_choices}\n\nPlease reply with the intake number or the dates you prefer.{demo_footer}",
+        "intake_selected": "📅 Selected Intake\n\n- Course: {course_name}\n- Dates: {display_date}\n- Time: {start_time}–{end_time} on both days\n- Intake type: {intake_type}\n- Availability: {availability}",
+        "participant_details": "📋 Enrollment Details\n\n{intake_notice}Please provide your participant and payment details using this template:\n\n{missing_template}\n\nYou may complete the template, send a numbered list, write the details naturally, or provide one field at a time.",
+        "continue_participant_details": "Please send the remaining details. You may copy this template:\n\n{missing_template}",
+        "outcome_saved": "Saved successfully\n\n{saved_items}",
+        "outcome_invalid": "Needs correction\n\n{invalid_items}",
+        "outcome_missing": "Still needed\n\n{missing_items}",
+        "correct_nric_only": "Please send only your corrected NRIC/FIN. Your other valid details are already saved. For privacy, it will be masked after validation.",
+        "correct_fields": "Please send only the corrected information. Your other valid details are already saved.",
+        "correct_payment_allocation": "Please send the corrected SkillsFuture and PayNow amounts. Your other valid enrollment details remain saved.",
+        "correct_and_choose_intake": "Please send the corrected information and your preferred intake.",
+        "payment_selection": "Payment summary\n\n- Course: {course_name}\n- Course fee: {course_fee}\n- SkillsFuture eligibility: {skillsfuture}\n- Amount currently due: {amount_due}\n\n{payment_question}",
+        "paynow_amount": "You selected PayNow. Please enter the PayNow amount. It must total the approved course fee of {course_fee}.",
+        "skillsfuture_amount": "Please enter the basic-tier SkillsFuture Credit amount you intend to use, up to the course fee of {course_fee}.",
+        "paynow_remainder": "The remaining amount is {remaining}. Please enter the PayNow amount so the full allocation equals {course_fee}.",
+        "utap_upfront_amount": "UTAP is reimbursed after course completion. Please enter the upfront PayNow amount; the approved course fee is {course_fee}.",
+        "confirmation": "Please review your enrolment before final submission.\n\nCourse\n\n- Course name: {course_name}{course_code_line}\n- Course fee: {course_fee}\n- Duration: {duration}\n- Training time: {training_time}\n- {intake_label}: {preferred_intake}\n{demo_note}\nParticipant\n\n- Full name: {full_name}\n- NRIC/FIN: {masked_nric}\n- Date of birth: {date_of_birth}\n- Email: {masked_email}\n- Mobile number: {masked_mobile}\n\nPayment\n\n- Method: {payment_method}\n{payment_lines}\n- Total allocated: {payment_total}\n- Remaining amount: {remaining}\n- Payment status: Awaiting staff verification\n\nPlease reply “Confirm enrollment” to submit your enrollment, “Change [field]” to update a detail, or “Cancel enrollment” to stop.",
+        "confirmed_awaiting_course_date": "Thank you, {first_name}! Your enrolment details have been recorded successfully ✅\n\nReference: {enrollment_id}\n\n📅 Our team will contact you once the upcoming intake date and exact training venue are confirmed. Payment remains subject to staff verification.",
+        "confirmed_with_course_date": "Thank you, {first_name}! Your enrolment details have been recorded successfully ✅\n\nReference: {enrollment_id}\n\n📅 Selected intake: {preferred_intake}\n\nOur team will confirm the exact training venue. Payment remains subject to staff verification.",
+        "already_awaiting_course_date": "{first_name}, your enrolment details are already saved. Our team will contact you once the upcoming intake date and exact training venue are confirmed.",
+        "already_confirmed": "{first_name}, your enrolment is already confirmed. No further action is needed.",
+        "correction_single": "Thanks, {first_name}. I’ve updated your {field_label}.",
+        "correction_multiple": "Thanks, {first_name}. I’ve updated those details.",
+        "correction_request": "{name_prefix}Please tell me which detail to change and provide the new value, for example: ‘Change my email to name@example.com’.",
+        "demo_note": "",
+        "rejected": "{opening} Your enrolment has not been confirmed. Which detail would you like to correct?",
+        "cancelled": "Your enrolment has been cancelled. No completed enrolment has been created. If you wish to start again later, just let me know.",
+        "faq_resume": "When you’re ready, you can continue by sending the remaining enrolment details 😊"
+      }
+    }
+  },
+  "additional_courses": [
+    {
+      "id": "dental-infection-control",
+      "code": "DICS-1D",
+      "name": "1-Day Dental Infection Control & Sterilisation Workshop",
+      "overview": "A practical workshop covering infection-prevention procedures, instrument decontamination, sterilisation workflows, personal protective equipment, clinical waste handling and operatory preparation.",
+      "target_participants": "New and existing dental assistants",
+      "certificate": "Certificate of Completion",
+      "fee": {"amount": 350, "currency": "SGD", "display": "S$350 nett"},
+      "duration": "one training day",
+      "training_time": "9:30am to 5:30pm",
+      "venue": {"confirmation_required": true, "customer_reply": "The exact training venue will be confirmed by the Q&M Training team."},
+      "skillsfuture": {"basic_tier_accepted": false, "mid_career_tier_accepted": false, "customer_reply": "SkillsFuture Credits are not currently available for this workshop."},
+      "utap": {"available": false, "customer_reply": "UTAP is not currently available for this workshop."},
+      "paynow": {"accepted": true, "uen": "201841969G", "customer_reply": "The S$350 nett workshop fee is payable in full by PayNow."},
+      "enrollment": {"payment_options": ["PayNow"], "payment_question": "This workshop requires full payment of S$350 by PayNow. Please confirm that you will use PayNow."},
+      "intakes": [],
+      "demo_intakes": [
+        {"id": "infection-control-2026-10-18", "course_id": "dental-infection-control", "start_date": "2026-10-18", "end_date": "2026-10-18", "start_time": "09:30", "end_time": "17:30", "intake_type": "Weekend", "display_date": "18 October 2026", "capacity": 20, "participant_count": 0, "status": "open", "is_demo": true},
+        {"id": "infection-control-2026-11-15", "course_id": "dental-infection-control", "start_date": "2026-11-15", "end_date": "2026-11-15", "start_time": "09:30", "end_time": "17:30", "intake_type": "Weekend", "display_date": "15 November 2026", "capacity": 20, "participant_count": 0, "status": "open", "is_demo": true}
+      ]
+    }
+  ],
+  "faqs": [
+    {
+      "topic": "course description",
+      "answer": "📚 Basic Certificate in Dental Assisting\n\nThank you for your interest in our 2-Day Basic Certificate in Dental Assisting. This beginner-friendly, practical course introduces essential skills such as recognising dental instruments and materials, infection control, and how to anticipate a dentist’s needs during procedures.\n\nCourse details:\n- Course fee: S$600 nett\n- Duration: Two consecutive training days\n- Training hours: 9:30am to 5:30pm on each day\n- Venue: The exact training venue will be confirmed for your selected intake\n\nYou can find more details at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting. Basic-tier SkillsFuture Credits may be used for the course fee.\n\nWould you like to learn more about the course or begin an enrolment? 😊"
+    },
+    {
+      "topic": "course fee and value",
+      "answer": "📚 Course Fee and Schedule\n\nThe course fee is S$600 nett.\n\n- Duration: Two consecutive training days\n- Training hours: 9:30am to 5:30pm on each day\n- The fee includes comprehensive course materials, instruction from experienced trainers, and access to specialised equipment and facilities\n\nWould you like to know more about the course contents or payment methods? 😊"
+    },
+    {
+      "topic": "duration and timing",
+      "answer": "📚 Course Fee and Schedule\n\nThe course fee is S$600 nett.\n\n- Duration: Two consecutive training days\n- Training hours: 9:30am to 5:30pm on each day\n- The fee includes comprehensive course materials, instruction from experienced trainers, and access to specialised equipment and facilities\n\nWould you like to know more about the course contents or payment methods? 😊"
+    },
+    {
+      "topic": "course fee concern",
+      "answer": "Thank you for sharing your concern about the course fee. We understand that cost is an important consideration, and we aim to ensure that our pricing reflects the quality and value of the education and resources provided.\n\n📚 The S$600 nett fee for the two-day course includes:\n\n- Comprehensive course materials\n- Instruction from experienced trainers\n- Access to specialised equipment and facilities\n- Practical knowledge that supports professional development\n\nWe believe the course can provide valuable skills for participants interested in dental assisting. We also appreciate your concern and will take it into consideration for future planning.\n\nIf there is a particular part of the course or fee that you would like to understand better, please feel free to ask 😊"
+    },
+    {
+      "topic": "venue",
+      "answer": "The supplied company information contains conflicting venue details, so the exact training venue will be confirmed for your selected intake.\n\nPlease let us know which intake you are considering, and our team will confirm the venue with you."
+    },
+    {
+      "topic": "course dates",
+      "answer": "Use the configured intake list. If it is empty, return the no_intakes_message exactly and do not invent a date."
+    },
+    {
+      "topic": "SkillsFuture",
+      "answer": "SkillsFuture Credits\n\nThere are two tiers of SkillsFuture Credits. This course is eligible only for basic-tier SkillsFuture Credits. Mid-Career SkillsFuture Credits cannot be used for the course fee.\n\nYou may check your basic-tier balance at https://sfc.myskillsfuture.gov.sg/claim and let us know how much you intend to use. You will need to submit your own claim. After receiving your enrolment and payment details, the team will prepare an invoice and email you the claim steps.\n\nWould you like help with the enrolment details?"
+    },
+    {
+      "topic": "Mid-Career SkillsFuture",
+      "answer": "Mid-Career SkillsFuture Credits\n\nThere are two tiers of SkillsFuture Credits. This course is eligible only for basic-tier SkillsFuture Credits. Mid-Career SkillsFuture Credits cannot be used to pay the course fee.\n\nYou can check your basic-tier SkillsFuture Credit balance at https://sfc.myskillsfuture.gov.sg/claim.\n\nWould you like to know how to use your basic-tier credits for enrolment?"
+    },
+    {
+      "topic": "PayNow",
+      "answer": "💳 PayNow Payment\n\nPayNow is accepted using UEN 201841969G.\n\nIf you are also using basic-tier SkillsFuture Credits, please tell us:\n- The SkillsFuture amount you intend to use\n- The remaining amount that you will pay by PayNow\n\nThe two amounts must total the S$600 nett course fee. Would you like help with the payment breakdown?"
+    },
+    {
+      "topic": "UTAP",
+      "answer": "UTAP Funding Support\n\nEligible NTUC Union members may receive support for 50% of the unfunded course fee, up to S$250 per year. NTUC members aged 40 and above may receive up to S$500 per year.\n\nHow to apply:\n\n1. Confirm that your NTUC Union membership is valid. You can check by chatting with NTUC at https://ntuc.co/chat or logging in to the NTUC U Portal at https://www.ntuc.org.sg.\n2. Enrol in the course, pay the course fee upfront, and attend both training days.\n3. After completing the course, log in to the NTUC U Portal and submit your UTAP claim.\n\nDocuments required:\n- Proof of payment, such as the course invoice or receipt\n- Proof of completion, such as the certificate or results slip\n\nBoth documents will be provided after the course. Please submit the claim within six months of course completion, as late submissions will not be accepted. UTAP cannot be combined with SkillsFuture Credits for the same course fee.\n\nWould you like help with the enrolment process?"
+    },
+    {
+      "topic": "minimum qualification",
+      "answer": "✅ Minimum Qualification\n\nGCE N Levels are preferred. If you do not have GCE N Levels, you may still be considered if you have basic English reading and writing skills, as the assessment is conducted in English.\n\nWould you like to learn more about the course or enrolment requirements? 😊"
+    },
+    {
+      "topic": "job opportunities",
+      "answer": "Employment Opportunities\n\nSuitable candidates may be considered for job opportunities on the last day of the class. The HR selection process considers several factors:\n\n- Workplace location\n- Work schedule\n- Skills and experience\n- Suitability and cultural fit\n- Interview performance\n\nEmployment is not guaranteed and will depend on the selection process.\n\nWould you like to know more about the skills covered by the course? 😊"
+    },
+    {
+      "topic": "payment options",
+      "answer": "💳 Payment Methods\n\nThere are three approved payment options:\n\n1. Basic-tier SkillsFuture Credits\n   Mid-Career SkillsFuture Credits cannot be used for this course. Any remaining course fee may be paid by PayNow.\n\n2. PayNow\n   Please use UEN 201841969G.\n\n3. UTAP reimbursement\n   Eligible NTUC Union members must pay the course fee upfront and apply for reimbursement after completing the course.\n\nSkillsFuture Credits and UTAP cannot be combined for the same course fee.\n\nWould you like help choosing a payment option? 😊"
+    },
+    {
+      "topic": "enrolment process",
+      "answer": "Enrolment Information\n\nTo register, please provide the following details:\n\n1. Full name as shown on your NRIC\n2. NRIC or FIN number\n3. Date of birth\n4. Email address\n5. Mobile number\n6. Preferred intake date, or Awaiting confirmation while dates are being updated\n7. Payment method\n8. SkillsFuture amount, where applicable\n9. PayNow amount, where applicable\n\nOnly basic-tier SkillsFuture Credits can be used. You may send all the details in one message. Any missing or invalid information will be requested without asking you to repeat valid details. A confirmation summary will be shown before submission."
+    },
+    {
+      "topic": "invoice and claim guidance",
+      "answer": "Invoice and Claim Guidance\n\nAfter the required enrolment and payment details are received, the team will prepare an invoice and email it together with the relevant payment or SkillsFuture claim instructions.\n\nWould you like help providing the required enrolment details?"
+    },
+    {
+      "topic": "payment screenshot channel",
+      "answer": "Payment Evidence\n\nPayment screenshots may be sent through email or WhatsApp. Email is the preferred channel so that the evidence can be stored and retrieved more easily.\n\nWould you like the team to confirm where to send it?"
+    },
+    {
+      "topic": "course website",
+      "answer": "📚 Course Information\n\nYou can find more course details at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting.\n\nPlease feel free to ask if there is a particular part of the course you would like to understand better 😊"
+    }
+  ]
+}
