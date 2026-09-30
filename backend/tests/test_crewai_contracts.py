@@ -110,7 +110,7 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
                 IntentClassification: IntentClassification(
                     intent=(
                         "faq"
-                        if "fee" in current_message
+                        if "fee" in current_message or "utap" in current_message
                         else "enrollment"
                     ),
                     confidence=0.99,
@@ -139,8 +139,11 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
 
-    assert send(client, conversation_id, "What is the fee?").status_code == 200
-    assert send(client, conversation_id, "I want to enrol").status_code == 200
+    assert send(client, conversation_id, "Can I claim UTAP reimbursement?").status_code == 200
+    enrollment_conversation_id = client.post(
+        "/api/conversations"
+    ).get_json()["conversation_id"]
+    assert send(client, enrollment_conversation_id, "I want to enrol").status_code == 200
 
     schemas = [crew.task.output_pydantic for crew in recorded]
     assert schemas == [

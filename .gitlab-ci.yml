@@ -1,0 +1,38 @@
+stages:
+  - test
+  - build
+
+default:
+  interruptible: true
+
+variables:
+  CREWAI_DISABLE_TELEMETRY: "true"
+  OTEL_SDK_DISABLED: "true"
+  OPENAI_API_KEY: ""
+  RUN_REAL_OPENAI_TEST: "0"
+  EMAIL_DELIVERY_ENABLED: "false"
+  EMAIL_LIVE_TEST_ENABLED: "false"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+backend_offline_tests:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -r backend/requirements.txt
+    - python -m pip install pytest-socket==0.7.0
+  script:
+    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_agent_isolated.py -q
+    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_crewai_contracts.py -q
+    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_tools.py -q
+    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment.py -q -k "partial_submission or multiple_fields or all_nine or repeated_confirmation or drafts_do_not_leak"
+
+frontend_tests_and_build:
+  stage: build
+  image: node:22-bookworm-slim
+  script:
+    - cd frontend
+    - npm ci
+    - npm test
+    - npm run build

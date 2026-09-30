@@ -238,6 +238,10 @@ def test_all_nine_enrollment_fields_are_stored_and_confirmed(
         "status": "awaiting_confirmation",
         "missing_fields": [],
         "demo_intakes_enabled": False,
+        "course_id": "dental-assisting-basic",
+        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_fee": "600.00",
+        "friendly_reference": None,
         "selected_intake": {
             "id": "approved-2027-10-17-1",
             "start_date": "2027-10-17",

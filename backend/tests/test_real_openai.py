@@ -8,6 +8,7 @@ from backend.app import create_app
 from backend.tests.conftest import authenticated_client, send
 
 
+@pytest.mark.live_provider
 @pytest.mark.skipif(
     os.getenv("RUN_REAL_OPENAI_TEST") != "1",
     reason="Set RUN_REAL_OPENAI_TEST=1 explicitly to call the real provider.",
