@@ -108,6 +108,20 @@ class ChatService:
                 reply = self.catalogue.course_clarification_reply()
             else:
                 reply = self.catalogue.focused_course_reply(selected_course, course_fact_topic)
+            name = _first_name(draft.full_name) if draft else None
+            if draft and draft.status not in {
+                "confirmed",
+                "awaiting_course_date",
+                "cancelled",
+            }:
+                if name and reply != self.catalogue.no_intakes_message:
+                    reply = _personalise_reply(reply, name)
+                reply += (
+                    "\n\nWhen you’re ready, you can continue with your remaining "
+                    "enrollment details 😊"
+                )
+            elif name and reply != self.catalogue.no_intakes_message:
+                reply = _personalise_reply(reply, name)
             return self._direct_reply(
                 conversation, user_message, draft, reply,
                 intent="faq", agent_name="faq_agent",

@@ -26,7 +26,7 @@ backend_offline_tests:
     - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_agent_isolated.py -q
     - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_crewai_contracts.py -q
     - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_tools.py -q
-    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment.py -q -k "partial_submission or multiple_fields or all_nine or repeated_confirmation or drafts_do_not_leak"
+    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment.py -q
 
 frontend_tests_and_build:
   stage: build

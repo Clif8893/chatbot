@@ -117,6 +117,10 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
 
     assert response["enrollment"] == {
         "status": "awaiting_confirmation",
+        "course_id": "dental-assisting-basic",
+        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_fee": "600.00",
+        "friendly_reference": None,
         "missing_fields": [],
         "demo_intakes_enabled": False,
         "selected_intake": None,
@@ -474,6 +478,10 @@ def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
 
     assert payment["enrollment"] == {
         "status": "awaiting_confirmation",
+        "course_id": "dental-assisting-basic",
+        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_fee": "600.00",
+        "friendly_reference": None,
         "missing_fields": [],
         "demo_intakes_enabled": False,
         "selected_intake": None,
