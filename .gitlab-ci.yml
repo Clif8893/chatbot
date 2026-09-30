@@ -14,6 +14,7 @@ variables:
   EMAIL_LIVE_TEST_ENABLED: "false"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONDONTWRITEBYTECODE: "1"
+  PYTEST_ADDOPTS: "--disable-socket --allow-unix-socket"
 
 backend_offline_tests:
   stage: test
@@ -23,10 +24,7 @@ backend_offline_tests:
     - python -m pip install -r backend/requirements.txt
     - python -m pip install pytest-socket==0.7.0
   script:
-    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_agent_isolated.py -q
-    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_crewai_contracts.py -q
-    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment_tools.py -q
-    - python -m pytest --disable-socket --allow-unix-socket backend/tests/test_enrollment.py -q
+    - python -m pytest backend/tests -m "not live_provider" -q
 
 frontend_tests_and_build:
   stage: build

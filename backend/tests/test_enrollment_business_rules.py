@@ -145,7 +145,7 @@ def test_seeded_intakes_are_database_backed_complete_and_idempotent(tmp_path, fa
             "demo-2026-11-21",
         ]
         assert {row.course_id for row in rows} == {
-            "basic-dental-assisting", "dental-infection-control"
+            "dental-assisting-basic", "dental-infection-control"
         }
         assert all(row.start_time.strftime("%H:%M") == "09:30" for row in rows)
         assert all(row.end_time.strftime("%H:%M") == "17:30" for row in rows)

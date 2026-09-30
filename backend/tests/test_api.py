@@ -64,7 +64,11 @@ def test_unknown_conversation_is_rejected(client):
 
 
 def test_messages_are_persisted_and_reloadable(client, conversation_id):
-    assert send(client, conversation_id, "What is the course duration?").status_code == 200
+    assert send(
+        client,
+        conversation_id,
+        "What is the duration of the 2-Day Basic Certificate in Dental Assisting?",
+    ).status_code == 200
     history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
     assert [message["role"] for message in history["messages"]] == ["user", "assistant"]
     assert "two consecutive training days" in history["messages"][1]["content"].casefold()
@@ -271,7 +275,7 @@ def test_provider_failure_does_not_leak_details_or_secret(tmp_path):
     )
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    response = send(client, conversation_id, "What is the fee?")
+    response = send(client, conversation_id, "Is parking included with the course?")
     rendered = response.get_data(as_text=True)
     assert response.status_code == 502
     assert "provider detail" not in rendered

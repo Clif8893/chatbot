@@ -90,6 +90,8 @@ class CourseCatalogue:
             return f"The {name} runs from {course.get('training_time', 'a time confirmed by staff')} ({duration})."
         if topic == "venue":
             return course.get("venue", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
+        if topic == "paynow":
+            return course.get("paynow", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
         if topic == "payment":
             options = course.get("enrollment", {}).get("payment_options", [])
             if options:

@@ -49,7 +49,7 @@ def test_demo_records_are_structured_unique_valid_and_consecutive():
     catalogue = CourseCatalogue(enable_demo_intakes=True)
     records = [
         item for item in catalogue.demo_intakes
-        if item["course_id"] == "basic-dental-assisting"
+        if item["course_id"] == "dental-assisting-basic"
     ]
 
     assert [

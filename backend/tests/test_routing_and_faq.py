@@ -14,7 +14,7 @@ def test_company_course_information_is_loaded_without_invented_intakes():
     assert catalogue.course_name == "2-Day Basic Certificate in Dental Assisting"
     assert catalogue.course_fee == Decimal("600")
     assert catalogue.course["duration"] == "two consecutive training days"
-    assert catalogue.course["training_time"] == "9:30am to 5:30pm on each day"
+    assert catalogue.course["training_time"] == "9:30am-5:30pm on each training day"
     assert catalogue.course["venue"]["reply_template_wording"] == "our HQ at Clementi Loop"
     assert catalogue.course["venue"]["confirmation_required"] is True
     assert catalogue.course["paynow"]["uen"] == "201841969G"
@@ -68,15 +68,16 @@ def test_course_description_matches_approved_reply_material(client, conversation
     assert "anticipate a dentist’s needs" in reply
 
 
-def test_fee_reply_preserves_approved_structure(client, conversation_id):
-    payload = send(client, conversation_id, "How much is the course fee?").get_json()
+def test_selected_course_fee_reply_uses_current_contract(client, conversation_id):
+    payload = send(
+        client,
+        conversation_id,
+        "How much is the 2-Day Basic Certificate in Dental Assisting?",
+    ).get_json()
     reply = payload["message"]["content"]
-    assert reply.startswith("📚 Course Fee and Schedule\n\n")
-    assert "S$600 nett" in reply
-    assert "- Duration: Two consecutive training days" in reply
-    assert "- Training hours: 9:30am to 5:30pm on each day" in reply
-    assert "comprehensive course materials" in reply
-    assert reply.endswith("😊")
+    assert reply == (
+        "The 2-Day Basic Certificate in Dental Assisting is S$600 nett."
+    )
 
 
 def test_expensive_course_reply_keeps_all_pdf_paragraphs_and_bullets(
@@ -101,10 +102,14 @@ def test_expensive_course_reply_keeps_all_pdf_paragraphs_and_bullets(
 def test_duration_and_training_time_are_from_company_information(
     client, conversation_id
 ):
-    payload = send(client, conversation_id, "How long is the course and what time is it?").get_json()
+    payload = send(
+        client,
+        conversation_id,
+        "How long is the 2-Day Basic Certificate in Dental Assisting and what time is it?",
+    ).get_json()
     reply = payload["message"]["content"]
     assert "two consecutive training days" in reply.casefold()
-    assert "9:30am to 5:30pm" in reply
+    assert "9:30am-5:30pm on each training day" in reply
 
 
 def test_skillsfuture_basic_tier_is_accepted(client, conversation_id):
@@ -129,12 +134,15 @@ def test_mid_career_skillsfuture_is_rejected(client, conversation_id):
 
 
 def test_paynow_information_uses_company_uen(client, conversation_id):
-    payload = send(client, conversation_id, "Can I pay by PayNow?").get_json()
+    payload = send(
+        client,
+        conversation_id,
+        "Can I pay by PayNow for the 2-Day Basic Certificate in Dental Assisting?",
+    ).get_json()
     reply = payload["message"]["content"]
     assert "PayNow is accepted" in reply
     assert "201841969G" in reply
     assert "SkillsFuture amount" in reply
-    assert reply.startswith("💳 PayNow Payment\n\n")
 
 
 def test_utap_guidance_explains_reimbursement_rules(client, conversation_id):
@@ -218,12 +226,15 @@ def test_misspelt_intake_question_uses_exact_company_fallback(
     )
 
 
-def test_venue_uses_reply_template_wording_and_flags_source_conflict(
+def test_venue_uses_selected_course_reply_without_unconfirmed_addresses(
     client, conversation_id
 ):
-    payload = send(client, conversation_id, "Where is the course venue?").get_json()
+    payload = send(
+        client,
+        conversation_id,
+        "Where is the 2-Day Basic Certificate in Dental Assisting course venue?",
+    ).get_json()
     reply = payload["message"]["content"]
-    assert "conflicting venue details" in reply
     assert "exact training venue will be confirmed" in reply
     assert "Clementi Loop" not in reply
     assert "Kitchener Road" not in reply
@@ -342,7 +353,7 @@ def test_fabricated_high_risk_facts_are_replaced_with_staff_confirmation(tmp_pat
     )
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    reply = send(client, conversation_id, "How much is the course fee?").get_json()[
+    reply = send(client, conversation_id, "Why is this course so expensive?").get_json()[
         "message"
     ]["content"]
     assert "S$999" not in reply

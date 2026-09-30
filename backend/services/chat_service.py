@@ -93,7 +93,12 @@ class ChatService:
                 )
 
         course_fact_topic = _course_fact_topic(user_text)
-        if course_fact_topic:
+        enrollment_progress_request = bool(
+            draft is not None
+            and draft.status not in {"discarded", "cancelled"}
+            and _is_enrollment_progress_request(user_text)
+        )
+        if course_fact_topic and not enrollment_progress_request:
             selected_course = self.catalogue.match_course(user_text)
             if selected_course is None and self.enrollment_resolver is not None:
                 context = self.enrollment_resolver.resolve(conversation, user_text)
@@ -908,6 +913,12 @@ def _course_fact_topic(message):
         return "time"
     if re.search(r"\b(?:venue|location|where|held)\b", text):
         return "venue"
+    if re.search(r"\b(?:screenshot|proof|evidence|whatsapp|email)\b", text):
+        return None
+    if re.search(r"\b(?:paynow|pay now|uen)\b", text) and re.search(
+        r"\b(?:what|which|how|can|is|are|does|check|tell|details|uen)\b", text
+    ):
+        return "paynow"
     if not re.search(r"\b(?:skillsfuture|mid career|utap)\b", text) and re.search(
         r"\b(?:what|which|how|can|payment options|paynow details)\b", text
     ) and re.search(r"\b(?:payment|pay|paynow)\b", text):
