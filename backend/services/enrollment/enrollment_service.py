@@ -6,14 +6,14 @@ from decimal import Decimal
 
 from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft, utc_now
-from backend.services.enrollment_parser import (
+from backend.services.enrollment.enrollment_parser import (
     is_explicit_correction,
     parse_enrollment_fields,
     redact_identity_for_ai,
 )
 from backend.services.privacy import mask_nric
-from backend.services.validation import validate_field
-from backend.tools import build_enrollment_tools
+from backend.services.enrollment.validation import validate_field
+from backend.tools.enrollment import build_enrollment_tools
 
 
 IDENTITY_FIELDS = (

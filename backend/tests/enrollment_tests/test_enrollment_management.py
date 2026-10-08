@@ -13,7 +13,7 @@ from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft, utc_now
 from backend.models.finance import CreditNoteRequest, FinanceCase, MasterInvoiceExport
 from backend.models.operations import AuditEvent, CourseDate, StaffEscalation
-from backend.services.enrollment_management_service import (
+from backend.services.enrollment.enrollment_management_service import (
     AWAITING_CANCELLATION,
     AWAITING_RESCHEDULE_CONFIRMATION,
     AWAITING_RESCHEDULE_SELECTION,

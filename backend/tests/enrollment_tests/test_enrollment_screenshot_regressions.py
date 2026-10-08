@@ -2,7 +2,7 @@
 
 from backend.agents.schemas import EnrollmentExtraction, EnrollmentFields
 from backend.models import EnrollmentDraft
-from backend.services.enrollment_parser import parse_enrollment_fields
+from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
 from backend.tests.conftest import send
 
 

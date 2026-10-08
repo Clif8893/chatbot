@@ -9,7 +9,7 @@ from backend.app import create_app
 from backend.extensions import db
 from backend.models import EnrollmentDraft
 from backend.services.course_catalogue import CATALOGUE_PATH, CourseCatalogue
-from backend.services.validation import has_valid_identity_checksum, validate_field
+from backend.services.enrollment.validation import has_valid_identity_checksum, validate_field
 from backend.tests.conftest import FakeAIService, authenticated_client, send
 
 

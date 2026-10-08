@@ -8,7 +8,7 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, PrivateAttr
 
 from backend.services.privacy import mask_nric
-from backend.services.validation import validate_field
+from backend.services.enrollment.validation import validate_field
 
 
 VALIDATABLE_FIELDS = (

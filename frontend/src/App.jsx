@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import ChatbotPage from "./components/ChatbotPage.jsx";
-import ParticipantPanel from "./components/ParticipantPanel.jsx";
+import ParticipantPanel from "./components/enrollment/ParticipantPanel.jsx";
 import StaffPortal from "./components/StaffPortal.jsx";
 import {
   getAuthSession,

@@ -422,7 +422,7 @@ class OperationsService:
             draft.confirmed_at = None
             self.audit('course_date_proposed', f'Participant confirmation requested for {intake.date}', conversation_id, actor)
             self._conversation(conversation_id).active_intent = 'enrollment'
-            from backend.services.enrollment_service import EnrollmentService
+            from backend.services.enrollment.enrollment_service import EnrollmentService
             summary = EnrollmentService(
                 None, self.catalogue, None, intake_service=self.intakes
             )._confirmation_summary(draft)

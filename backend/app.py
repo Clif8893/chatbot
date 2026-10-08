@@ -33,11 +33,11 @@ from backend.services.chat_service import (
 )
 from backend.services.conversation_repository import ConversationRepository
 from backend.services.course_catalogue import CourseCatalogue
-from backend.services.current_enrollment_service import CurrentEnrollmentResolver
+from backend.services.enrollment.current_enrollment_service import CurrentEnrollmentResolver
 from backend.services.crewai_service import CrewAIService
 from backend.services.database_migrations import apply_additive_migrations
 from backend.services.delivery_service import DeliveryService
-from backend.services.enrollment_management_service import EnrollmentManagementService
+from backend.services.enrollment.enrollment_management_service import EnrollmentManagementService
 from backend.services.finance_service import FinanceService
 from backend.services.invoice_template_service import InvoiceTemplateService
 from backend.services.invoice_email_service import (
@@ -47,7 +47,7 @@ from backend.services.invoice_email_service import (
 )
 from backend.services.master_invoice_service import MasterInvoiceService
 from backend.services.maintenance_service import MaintenanceService
-from backend.services.intake_service import IntakeService
+from backend.services.enrollment.intake_service import IntakeService
 from backend.services.operations_service import OperationsService
 from backend.services.privacy import mask_nrics_in_text
 from backend.services.security import (

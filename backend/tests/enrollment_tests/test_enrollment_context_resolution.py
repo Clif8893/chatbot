@@ -9,7 +9,10 @@ from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft, utc_now
 from backend.models.operations import CourseDate
 from backend.tests.conftest import authenticated_client, send
-from backend.tests.test_enrollment_management import add_confirmed, management_app
+from backend.tests.enrollment_tests.test_enrollment_management import (
+    add_confirmed,
+    management_app,
+)
 
 
 @pytest.mark.parametrize(

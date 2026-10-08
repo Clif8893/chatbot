@@ -1,1 +1,1 @@
-"""Application, validation, privacy, and catalogue services."""
+"""Shared application services and domain service packages."""

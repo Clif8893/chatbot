@@ -19,7 +19,7 @@ from backend.extensions import db
 from backend.models import EnrollmentDraft, utc_now
 from backend.models.finance import Invoice, MasterInvoiceAudit, MasterInvoiceExport
 from backend.models.operations import CourseDate
-from backend.services.validation import validate_field
+from backend.services.enrollment.validation import validate_field
 
 
 SHEET_NAME = "Master Invoice List"

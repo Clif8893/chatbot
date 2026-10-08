@@ -44,7 +44,8 @@ review unless an approved verification policy is explicitly enabled.
 - [Requirements template](docs/templates/requirements-template.md)
 - [Design template](docs/templates/design-template.md)
 - [Tasks template](docs/templates/tasks-template.md)
-- [Enrollment Agent development workbook](notebooks/Enrollment_Agent_Development_Workbook.ipynb)
+- [Enrollment Agent implementation overview](docs/enrollment/ENROLLMENT_OVERVIEW.md)
+- [Enrollment Agent development workbook](notebooks/enrollment/Enrollment_Agent_Development_Workbook.ipynb)
 
 Older requirements material is retained under `docs/archive/` and is not the
 current source of truth.
@@ -73,11 +74,17 @@ adapter used by all three agents.
 | Path | Purpose |
 |---|---|
 | `frontend/` | React components, Vite configuration, styles, and REST client |
+| `frontend/src/components/enrollment/` | Participant-facing enrollment status, invoice, and payment-evidence UI |
 | `backend/agents/` | CrewAI agent definitions and Pydantic output contracts |
-| `backend/services/` | CrewAI execution, persistence, routing, validation, privacy, enrollment, and catalogue services |
+| `backend/services/` | Shared CrewAI execution, persistence, routing, privacy, finance, and catalogue services |
+| `backend/services/enrollment/` | Enrollment state machine, parsing, validation, intake allocation, and participant enrollment management |
+| `backend/tools/enrollment/` | Read-only tools scoped to the Enrollment Agent runtime |
 | `backend/models/` | SQLAlchemy models |
 | `backend/data/` | Editable company course information and ignored local SQLite data/backups |
-| `backend/tests/` | Model-free automated tests plus one opt-in live smoke test |
+| `backend/tests/` | Shared model-free automated tests plus one opt-in live smoke test |
+| `backend/tests/enrollment_tests/` | Enrollment Agent, course-selection, intake, memory, management, and workflow regression tests |
+| `docs/enrollment/` | Enrollment Agent implementation and integration documentation |
+| `notebooks/enrollment/` | Offline Enrollment Agent development evidence |
 | `docs/` | Current project documentation and archived drafts |
 
 ## Backend Setup
@@ -225,15 +232,15 @@ npm run build
 
 ### Offline Enrollment Agent workbook
 
-`notebooks/Enrollment_Agent_Development_Workbook.ipynb` follows the course's
+`notebooks/enrollment/Enrollment_Agent_Development_Workbook.ipynb` follows the course's
 single-agent development sequence using the production Enrollment Agent and its
 read-only course-information tool. It uses a scripted `FakeLLM`, blocks external
 network access, contains only fictional inputs, and does not start Flask or open
 the application database. Its transferable regression coverage is in
-`backend/tests/test_enrollment_agent_isolated.py`:
+`backend/tests/enrollment_tests/test_enrollment_agent_isolated.py`:
 
 ```powershell
-.\backend\.venv\Scripts\python.exe -m pytest backend\tests\test_enrollment_agent_isolated.py -q
+.\backend\.venv\Scripts\python.exe -m pytest backend\tests\enrollment_tests\test_enrollment_agent_isolated.py -q
 ```
 
 The live-provider smoke test is skipped unless explicitly enabled:

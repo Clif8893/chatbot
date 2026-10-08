@@ -1,13 +1,11 @@
 # Enrollment Agent evidence and implementation owner.
 /backend/agents/enrollment_agent/ @Dhiraj3927
-/backend/tools/ @Dhiraj3927
-/backend/services/enrollment_service.py @Dhiraj3927
-/backend/services/enrollment_parser.py @Dhiraj3927
-/backend/services/validation.py @Dhiraj3927
-/backend/services/crewai_service.py @Dhiraj3927
-/backend/tests/test_enrollment*.py @Dhiraj3927
-/backend/tests/test_crewai_contracts.py @Dhiraj3927
-/notebooks/Enrollment_Agent_Development_Workbook.ipynb @Dhiraj3927
+/backend/services/enrollment/ @Dhiraj3927
+/backend/tools/enrollment/ @Dhiraj3927
+/backend/tests/enrollment_tests/ @Dhiraj3927
+/frontend/src/components/enrollment/ @Dhiraj3927
+/docs/enrollment/ @Dhiraj3927
+/notebooks/enrollment/ @Dhiraj3927
 
 # Shared review evidence; replace with confirmed team owners when available.
 /.gitlab-ci.yml @Dhiraj3927

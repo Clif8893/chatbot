@@ -13,8 +13,8 @@ from backend.services.invoice_email_service import InvoiceEmailError, ResendCool
 from backend.models.operations import AuditEvent, CourseDate, StaffEscalation
 from backend.services.conversation_repository import archive_discarded_draft
 from backend.services.privacy import mask_nric, mask_nrics_in_text
-from backend.services.enrollment_parser import parse_enrollment_fields
-from backend.services.validation import validate_field
+from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
+from backend.services.enrollment.validation import validate_field
 
 
 AWAITING_CANCELLATION = "awaiting_cancellation_confirmation"
@@ -825,7 +825,7 @@ class EnrollmentManagementService:
         ):
             if getattr(draft, field, None) is not None:
                 saved.append(self.catalogue.enrollment_field_label(field))
-        from backend.services.enrollment_service import EnrollmentService
+        from backend.services.enrollment.enrollment_service import EnrollmentService
 
         missing = EnrollmentService.missing_fields(draft, self.catalogue)
         corrections = list((draft.validation_errors or {}).keys())

@@ -10,9 +10,9 @@ from backend.extensions import db
 from backend.models import Conversation, User
 from backend.services.conversation_repository import ConversationRepository
 from backend.services.crewai_service import CrewAIService
-from backend.services.enrollment_service import EnrollmentService
-from backend.tools import build_enrollment_tools
-from backend.tools.conversation_memory_tool import ConversationMemoryTool
+from backend.services.enrollment.enrollment_service import EnrollmentService
+from backend.tools.enrollment import build_enrollment_tools
+from backend.tools.enrollment.conversation_memory_tool import ConversationMemoryTool
 
 
 def _tools_for(app, conversation_id, context_limit=3):

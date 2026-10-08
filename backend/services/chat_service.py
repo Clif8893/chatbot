@@ -6,11 +6,11 @@ from datetime import timezone
 
 from backend.agents.schemas import IntentClassification
 from backend.extensions import db
-from backend.services.enrollment_service import EnrollmentService
+from backend.services.enrollment.enrollment_service import EnrollmentService
 from backend.services.faq_attachments import FAQAttachmentCatalogue
 from backend.services.privacy import mask_nrics_in_text, redact_for_classification
 from backend.services.invoice_email_service import InvoiceEmailError, ResendCooldownError
-from backend.services.enrollment_management_service import is_course_change_request
+from backend.services.enrollment.enrollment_management_service import is_course_change_request
 
 
 UNCLEAR_REPLY = (

@@ -13,8 +13,8 @@ The Enrollment Agent converts free-text participant messages into a typed Pydant
 | `backend/agents/enrollment_agent/__init__.py` | Defines the CrewAI Enrollment Agent, including its role, goal, instructions, tools, and safety settings. |
 | `backend/services/crewai_service.py` | Builds the extraction `Task`, runs a sequential `Crew`, calls `kickoff()`, and returns `EnrollmentExtraction`. |
 | `backend/tools/` | Provides five typed, read-only tools to the Enrollment Agent. |
-| `backend/services/enrollment_service.py` | Owns the enrollment state machine, deterministic post-extraction validation, corrections, confirmation, and persistence. |
-| `backend/services/validation.py` | Validates NRIC/FIN checksum, DOB and age, email, mobile, intake, payment method, and monetary values. |
+| `backend/services/enrollment/enrollment_service.py` | Owns the enrollment state machine, deterministic post-extraction validation, corrections, confirmation, and persistence. |
+| `backend/services/enrollment/validation.py` | Validates NRIC/FIN checksum, DOB and age, email, mobile, intake, payment method, and monetary values. |
 | `backend/data/course_information.json` | Structured source for supported courses, fees, payment rules, intake definitions, FAQs, and reply templates. |
 | `backend/models/__init__.py` | Defines `Conversation`, `Message`, and `EnrollmentDraft` persistence models. |
 | `backend/services/master_invoice_service.py` | Uses `openpyxl` and `filelock` to maintain one multi-enrollment Master Invoice workbook. |
@@ -52,13 +52,13 @@ These tools provide controlled context only. They do not confirm enrollment, mod
 
 | Check | Verified location |
 |---|---|
-| Checksum algorithm | `backend/services/validation.py:250` — `has_valid_identity_checksum()`; constants at lines 15–23 |
-| Age calculation and limits | `backend/services/validation.py:60` — `calculate_age()`; `validate_field()` starts at line 67 and applies DOB limits around lines 130–139 |
-| Payment mathematics | `backend/services/enrollment_service.py:891` — `_payment_values_error()` |
-| Required extraction fields | `backend/services/enrollment_service.py:31` — `ENROLLMENT_FIELDS` (course plus nine participant/intake/payment fields) |
+| Checksum algorithm | `backend/services/enrollment/validation.py:250` — `has_valid_identity_checksum()`; constants at lines 15–23 |
+| Age calculation and limits | `backend/services/enrollment/validation.py:60` — `calculate_age()`; `validate_field()` starts at line 67 and applies DOB limits around lines 130–139 |
+| Payment mathematics | `backend/services/enrollment/enrollment_service.py:891` — `_payment_values_error()` |
+| Required extraction fields | `backend/services/enrollment/enrollment_service.py:31` — `ENROLLMENT_FIELDS` (course plus nine participant/intake/payment fields) |
 | Agent definition | `backend/agents/enrollment_agent/__init__.py:6` — `build_enrollment_agent()` |
 | Extraction prompt and Pydantic output | `backend/services/crewai_service.py:117` — `extract_enrollment()`; `output_pydantic=EnrollmentExtraction` near line 157 |
-| Read-only tool construction | `backend/tools/__init__.py:10` — `build_enrollment_tools()` |
+| Read-only tool construction | `backend/tools/enrollment/__init__.py:10` — `build_enrollment_tools()` |
 | Persistent draft | `backend/models/__init__.py:73` — `EnrollmentDraft` |
 | Course rules | `backend/data/course_information.json` — `course`, `additional_courses`, and `enrollment` sections |
 | Excel workbook export | `backend/services/master_invoice_service.py:67` — `MasterInvoiceService`; `export_confirmed_enrollment()` at line 93; `_new_workbook()` at line 551 |

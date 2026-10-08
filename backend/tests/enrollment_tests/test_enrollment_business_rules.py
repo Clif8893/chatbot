@@ -9,7 +9,7 @@ from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft
 from backend.models.operations import CourseDate
 from backend.services.course_catalogue import CourseCatalogue
-from backend.services.validation import validate_field
+from backend.services.enrollment.validation import validate_field
 from backend.tests.conftest import authenticated_client, send
 
 

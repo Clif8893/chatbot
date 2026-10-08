@@ -7,8 +7,8 @@ import pytest
 from backend.app import create_app
 from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft
-from backend.services.enrollment_service import EnrollmentService
-from backend.tools import build_enrollment_tools
+from backend.services.enrollment.enrollment_service import EnrollmentService
+from backend.tools.enrollment import build_enrollment_tools
 from backend.tests.conftest import authenticated_client, send
 
 

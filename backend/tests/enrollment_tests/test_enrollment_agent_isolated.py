@@ -22,7 +22,7 @@ from pydantic import PrivateAttr
 from backend.agents.enrollment_agent import build_enrollment_agent
 from backend.agents.schemas import EnrollmentExtraction
 from backend.services.course_catalogue import CourseCatalogue
-from backend.tools.course_information_tool import CourseInformationTool
+from backend.tools.enrollment.course_information_tool import CourseInformationTool
 
 
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
