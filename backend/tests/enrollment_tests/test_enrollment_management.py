@@ -243,7 +243,7 @@ def test_confirmed_course_change_revalidates_intake_fee_and_capacity(tmp_path, f
     assert "Available Intake Dates" in requested["message"]["content"]
     confirmation = send(client, conversation_id, "1").get_json()
     assert "Confirm change" in confirmation["message"]["content"]
-    assert "PayNow S$350.00" in confirmation["message"]["content"]
+    assert "PayNow" not in confirmation["message"]["content"]
 
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
@@ -258,9 +258,9 @@ def test_confirmed_course_change_revalidates_intake_fee_and_capacity(tmp_path, f
         assert draft.course_fee == Decimal("350")
         assert draft.intake_id == "infection-control-2026-10-18"
         assert draft.allocated_intake_id == "infection-control-2026-10-18"
-        assert draft.payment_method == "paynow"
-        assert draft.skillsfuture_amount == Decimal("0")
-        assert draft.paynow_amount == Decimal("350")
+        assert draft.payment_method == "skillsfuture_paynow"
+        assert draft.skillsfuture_amount == Decimal("400")
+        assert draft.paynow_amount == Decimal("200")
         assert db.session.get(CourseDate, "demo-2026-10-10").participant_count == 0
         assert db.session.get(CourseDate, "infection-control-2026-10-18").participant_count == 1
 
@@ -576,7 +576,8 @@ def test_status_queries_are_deterministic_accurate_and_private(tmp_path, fake_ai
     assert "Enrollment Status" in content
     assert "Confirmed" in content
     assert "10–11 October 2026" in content
-    assert "S$400.00" in content and "S$200.00" in content
+    assert "S$400.00" not in content and "S$200.00" not in content
+    assert "Payment status" not in content
     assert "S1234567D" not in content
     assert response["routing"]["intent"] == "enrollment"
 

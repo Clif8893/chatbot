@@ -37,6 +37,17 @@ def test_existing_database_data_survives_enrollment_field_migration(tmp_path, fa
                 confirmed_at DATETIME,
                 FOREIGN KEY(conversation_id) REFERENCES conversations (id)
             );
+            CREATE TABLE messages (
+                id VARCHAR(36) PRIMARY KEY,
+                conversation_id VARCHAR(36) NOT NULL,
+                role VARCHAR(16) NOT NULL,
+                content TEXT NOT NULL,
+                agent_name VARCHAR(64),
+                detected_intent VARCHAR(32),
+                classification_confidence FLOAT,
+                created_at DATETIME NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations (id)
+            );
             CREATE TABLE course_dates (
                 id VARCHAR(36) PRIMARY KEY,
                 date DATE NOT NULL UNIQUE,
@@ -68,6 +79,14 @@ def test_existing_database_data_survives_enrollment_field_migration(tmp_path, fa
                 'S1234567D', '2000-05-15', 'test.student@example.com', '2026-10-10',
                 'confirmed', '2026-09-01 00:00:00.000000',
                 '2026-09-01 00:00:00.000000', NULL
+            );
+            INSERT INTO messages VALUES (
+                'later-message', 'existing-conversation', 'assistant', 'Second',
+                'faq_agent', 'faq', 0.95, '2026-09-01 00:00:02.000000'
+            );
+            INSERT INTO messages VALUES (
+                'earlier-message', 'existing-conversation', 'user', 'First',
+                'faq_agent', 'faq', 0.95, '2026-09-01 00:00:01.000000'
             );
             INSERT INTO course_dates VALUES (
                 'existing-intake', '2026-10-10', '2026-10-11', 'Weekend', 20,
@@ -127,7 +146,24 @@ def test_existing_database_data_survives_enrollment_field_migration(tmp_path, fa
         message_columns = {
             column["name"] for column in inspect(db.engine).get_columns("messages")
         }
-        assert {"image_url", "image_alt", "image_status"} <= message_columns
+        assert {
+            "image_url",
+            "image_alt",
+            "image_status",
+            "sequence",
+            "outcome_status",
+            "error_category",
+        } <= message_columns
+        migrated_messages = db.session.execute(
+            db.text(
+                "SELECT id, sequence, outcome_status, error_category FROM messages "
+                "ORDER BY sequence"
+            )
+        ).all()
+        assert migrated_messages == [
+            ("earlier-message", 1, "historical", None),
+            ("later-message", 2, "historical", None),
+        ]
         export_columns = {
             column["name"]
             for column in inspect(db.engine).get_columns("master_invoice_exports")
@@ -162,3 +198,9 @@ def test_existing_database_data_survives_enrollment_field_migration(tmp_path, fa
         assert draft.validation_errors == {}
         assert draft.allocated_intake_id == "existing-intake"
         assert db.session.get(CourseDate, "existing-intake").participant_count == 1
+
+    backups = list((tmp_path / "backups").glob("existing-pre-migration-*.db"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert connection.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 1

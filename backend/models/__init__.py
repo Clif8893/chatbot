@@ -65,6 +65,9 @@ class Message(db.Model):
     image_url = db.Column(db.String(500), nullable=True)
     image_alt = db.Column(db.String(500), nullable=True)
     image_status = db.Column(db.String(64), nullable=True)
+    sequence = db.Column(db.Integer, nullable=False, default=0)
+    outcome_status = db.Column(db.String(32), nullable=True)
+    error_category = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
 
     conversation = db.relationship("Conversation", back_populates="messages")

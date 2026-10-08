@@ -37,7 +37,7 @@ class ConversationRepository:
     def last_message(conversation):
         return (
             Message.query.filter_by(conversation_id=conversation.id)
-            .order_by(Message.created_at.desc())
+            .order_by(Message.sequence.desc(), Message.created_at.desc(), Message.id.desc())
             .first()
         )
 
@@ -53,6 +53,8 @@ class ConversationRepository:
         image_url=None,
         image_alt=None,
         image_status=None,
+        outcome_status=None,
+        error_category=None,
     ):
         created_at = utc_now()
         previous_times = [
@@ -63,6 +65,24 @@ class ConversationRepository:
         if previous_times and created_at <= max(previous_times):
             created_at = max(previous_times) + timedelta(microseconds=1)
         conversation.updated_at = created_at
+        sequence = (
+            db.session.query(db.func.max(Message.sequence))
+            .filter(Message.conversation_id == conversation.id)
+            .scalar()
+            or 0
+        ) + 1
+        if role == "assistant":
+            latest_user = (
+                Message.query.filter_by(conversation_id=conversation.id, role="user")
+                .order_by(Message.sequence.desc(), Message.created_at.desc())
+                .first()
+            )
+            if latest_user is not None and latest_user.outcome_status == "received":
+                latest_user.agent_name = agent_name
+                latest_user.detected_intent = detected_intent
+                latest_user.classification_confidence = classification_confidence
+                latest_user.outcome_status = "success"
+                latest_user.error_category = None
         message = Message(
             conversation=conversation,
             role=role,
@@ -73,6 +93,9 @@ class ConversationRepository:
             image_url=image_url,
             image_alt=image_alt,
             image_status=image_status,
+            sequence=sequence,
+            outcome_status=outcome_status or ("received" if role == "user" else "success"),
+            error_category=error_category,
             created_at=created_at,
         )
         db.session.add(message)
@@ -82,7 +105,7 @@ class ConversationRepository:
     def recent_messages(self, conversation, limit):
         recent = (
             Message.query.filter_by(conversation_id=conversation.id)
-            .order_by(Message.created_at.desc())
+            .order_by(Message.sequence.desc(), Message.created_at.desc(), Message.id.desc())
             .limit(limit)
             .all()
         )
@@ -91,9 +114,21 @@ class ConversationRepository:
     def all_messages(self, conversation):
         return (
             Message.query.filter_by(conversation_id=conversation.id)
-            .order_by(Message.created_at.asc())
+            .order_by(Message.sequence.asc(), Message.created_at.asc(), Message.id.asc())
             .all()
         )
+
+    @staticmethod
+    def mark_latest_user_error(conversation, error_category):
+        message = (
+            Message.query.filter_by(conversation_id=conversation.id, role="user")
+            .order_by(Message.sequence.desc(), Message.created_at.desc(), Message.id.desc())
+            .first()
+        )
+        if message is not None and message.outcome_status == "received":
+            message.outcome_status = "error"
+            message.error_category = str(error_category)[:64]
+        return message
 
     def get_or_create_draft(self, conversation):
         draft = conversation.enrollment_draft

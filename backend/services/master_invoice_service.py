@@ -284,7 +284,6 @@ class MasterInvoiceService:
             "date_of_birth",
             "email",
             "mobile_number",
-            "payment_method",
         ):
             _, error = validate_field(
                 field,
@@ -299,8 +298,6 @@ class MasterInvoiceService:
         fee = Decimal(str(enrollment.course_fee or 0))
         selected_course = self.catalogue.course_for(enrollment.course_id or enrollment.course)
         approved_fee = Decimal(str(self.catalogue.course_fee_for(selected_course) or 0))
-        skillsfuture = Decimal(str(enrollment.skillsfuture_amount or 0))
-        paynow = Decimal(str(enrollment.paynow_amount or 0))
         if fee != approved_fee:
             errors.append("The persisted course fee does not match the selected course.")
         if enrollment.intake_id:
@@ -309,29 +306,6 @@ class MasterInvoiceService:
                 errors.append("The selected intake record does not exist.")
             elif selected_course is None or intake.course_id != selected_course.get("id"):
                 errors.append("The selected intake does not belong to the selected course.")
-        for field, value in (
-            ("skillsfuture_amount", skillsfuture),
-            ("paynow_amount", paynow),
-        ):
-            _, error = validate_field(
-                field,
-                value,
-                self.catalogue,
-                course_value=enrollment.course,
-                **self.validation_options,
-            )
-            if error:
-                errors.append(error)
-        if skillsfuture + paynow != fee:
-            errors.append("The payment amounts must total the selected course fee.")
-        if enrollment.payment_method in {"paynow", "utap"} and skillsfuture != 0:
-            errors.append("This payment method cannot contain a SkillsFuture amount.")
-        if (
-            enrollment.payment_method == "skillsfuture_paynow"
-            and skillsfuture <= 0
-        ):
-            errors.append("A SkillsFuture payment requires a positive credit amount.")
-
         if enrollment.status == "awaiting_course_date":
             if enrollment.preferred_intake_date is not None:
                 errors.append("The awaiting-course-date state is inconsistent.")
@@ -575,8 +549,21 @@ class MasterInvoiceService:
     def _write_row(
         self, worksheet, row_number, number, enrollment, record, invoice
     ):
-        skillsfuture = Decimal(str(enrollment.skillsfuture_amount or 0))
-        paynow = Decimal(str(enrollment.paynow_amount or 0))
+        skillsfuture = (
+            Decimal(str(enrollment.skillsfuture_amount))
+            if enrollment.skillsfuture_amount is not None
+            else None
+        )
+        paynow = (
+            Decimal(str(enrollment.paynow_amount))
+            if enrollment.paynow_amount is not None
+            else None
+        )
+        payment_total = (
+            (skillsfuture or Decimal("0")) + (paynow or Decimal("0"))
+            if skillsfuture is not None or paynow is not None
+            else None
+        )
         values = (
             number,
             self._safe_text(record.invoice_number),
@@ -601,7 +588,7 @@ class MasterInvoiceService:
             self._safe_text(_payment_method_label(enrollment.payment_method)),
             skillsfuture,
             paynow,
-            skillsfuture + paynow,
+            payment_total,
             self._safe_text(enrollment.status.replace("_", " ").title()),
             "Exported successfully",
             enrollment.id,
@@ -714,8 +701,16 @@ class MasterInvoiceService:
                 enrollment.intake_end_date or enrollment.preferred_intake_date
             ),
             "payment_method": enrollment.payment_method,
-            "skillsfuture_amount": str(enrollment.skillsfuture_amount or 0),
-            "paynow_amount": str(enrollment.paynow_amount or 0),
+            "skillsfuture_amount": (
+                str(enrollment.skillsfuture_amount)
+                if enrollment.skillsfuture_amount is not None
+                else None
+            ),
+            "paynow_amount": (
+                str(enrollment.paynow_amount)
+                if enrollment.paynow_amount is not None
+                else None
+            ),
             "status": enrollment.status,
             "cancelled_at": _iso(enrollment.cancelled_at),
             "rescheduled_at": _iso(enrollment.rescheduled_at),

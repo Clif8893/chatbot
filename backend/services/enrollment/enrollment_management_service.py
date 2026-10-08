@@ -260,14 +260,6 @@ class EnrollmentManagementService:
                 context.enrollment,
                 "participant_fee_lookup",
             )
-        if is_participant_payment_query(text):
-            context = self.resolver.resolve(conversation, text)
-            return ManagementResult(
-                self.participant_payment_reply(context),
-                context.enrollment,
-                "participant_payment_lookup",
-            )
-
         if _confirmation_without_pending(text):
             return ManagementResult(
                 "There is no cancellation, intake change, detail change, or invoice resend awaiting confirmation.",
@@ -306,7 +298,7 @@ class EnrollmentManagementService:
             "I can help you update your enrollment.\n\n"
             "What would you like to change?\n\n"
             "1. Participant details\n2. Course\n3. Intake date\n"
-            "4. Payment method or allocation\n5. Cancel enrollment\n\n"
+            "4. Cancel enrollment\n\n"
             "Please reply with the option number or describe the change.",
             draft,
             "change_selection_required",
@@ -482,7 +474,6 @@ class EnrollmentManagementService:
                 draft,
                 "change_escalated",
             )
-        fee = Decimal(pending["course_fee"])
         pending.update(
             {
                 "intake_id": target.id,
@@ -490,9 +481,6 @@ class EnrollmentManagementService:
                 "intake_start_date": target.date.isoformat(),
                 "intake_end_date": target.end_date.isoformat(),
                 "intake_is_demo": bool(target.is_demo),
-                "payment_method": "paynow",
-                "skillsfuture_amount": "0.00",
-                "paynow_amount": str(fee),
             }
         )
         conversation.pending_action = AWAITING_CHANGE_CONFIRMATION
@@ -505,8 +493,7 @@ class EnrollmentManagementService:
             "You requested the following change:\n\n"
             f"- Current course: {draft.course}\n"
             f"- New course: {course_name}\n"
-            f"- New intake: {self._row_display(target)}\n"
-            f"- New payment allocation: PayNow S${fee:.2f}\n\n"
+            f"- New intake: {self._row_display(target)}\n\n"
             "Please reply “Confirm change” to apply this update, or “Keep enrollment” "
             "to keep your current enrollment.",
             draft,
@@ -535,7 +522,6 @@ class EnrollmentManagementService:
                 return self._stage_course_change(conversation, draft, course)
         allowed = {
             "full_name", "date_of_birth", "email", "mobile_number",
-            "payment_method", "skillsfuture_amount", "paynow_amount",
         }
         candidate = {}
         errors = []
@@ -553,33 +539,6 @@ class EnrollmentManagementService:
             return ManagementResult(errors[0], draft, "change_invalid")
         if not candidate:
             return None
-
-        payment = {
-            "payment_method": candidate.get("payment_method", draft.payment_method),
-            "skillsfuture_amount": Decimal(
-                str(candidate.get("skillsfuture_amount", draft.skillsfuture_amount or 0))
-            ),
-            "paynow_amount": Decimal(
-                str(candidate.get("paynow_amount", draft.paynow_amount or 0))
-            ),
-        }
-        if any(field in candidate for field in ("payment_method", "skillsfuture_amount", "paynow_amount")):
-            fee = Decimal(str(draft.course_fee))
-            if payment["skillsfuture_amount"] + payment["paynow_amount"] != fee:
-                return ManagementResult(
-                    f"The payment amounts must total S${fee:.2f}. No change was applied.",
-                    draft,
-                    "change_invalid",
-                )
-            if (
-                "infection control" in draft.course.casefold()
-                and (payment["payment_method"] != "paynow" or payment["skillsfuture_amount"] != 0)
-            ):
-                return ManagementResult(
-                    "This workshop requires full payment by PayNow. No change was applied.",
-                    draft,
-                    "change_invalid",
-                )
 
         conversation.pending_action = AWAITING_CHANGE_CONFIRMATION
         conversation.pending_enrollment_id = draft.id
@@ -619,8 +578,6 @@ class EnrollmentManagementService:
         for field, value in candidate.items():
             if field == "date_of_birth":
                 value = date.fromisoformat(value)
-            elif field in {"skillsfuture_amount", "paynow_amount"}:
-                value = Decimal(value)
             setattr(draft, field, value)
             changed.append(field)
         self._clear_pending(conversation)
@@ -675,9 +632,6 @@ class EnrollmentManagementService:
             "intake_start_date": draft.intake_start_date,
             "intake_end_date": draft.intake_end_date,
             "intake_is_demo": draft.intake_is_demo,
-            "payment_method": draft.payment_method,
-            "skillsfuture_amount": draft.skillsfuture_amount,
-            "paynow_amount": draft.paynow_amount,
         }
         draft.course = course["name"]
         draft.course_id = course["id"]
@@ -687,9 +641,6 @@ class EnrollmentManagementService:
         draft.intake_start_date = target.date
         draft.intake_end_date = target.end_date
         draft.intake_is_demo = bool(target.is_demo)
-        draft.payment_method = "paynow"
-        draft.skillsfuture_amount = Decimal("0.00")
-        draft.paynow_amount = draft.course_fee
         try:
             self.intakes.allocate(draft)
         except ValueError as exc:
@@ -720,7 +671,7 @@ class EnrollmentManagementService:
                     db.session.rollback()
         return ManagementResult(
             f"Your enrollment has been updated to {draft.course} for {self._row_display(target)}. "
-            f"The payment allocation is PayNow S${draft.course_fee:.2f}. Your enrollment reference is unchanged ✅",
+            "Your enrollment reference is unchanged ✅",
             draft,
             "change_confirmed",
         )
@@ -809,19 +760,13 @@ class EnrollmentManagementService:
             lines.append(f"- Time: {course.get('training_time', '9:30am–5:30pm')}")
             if draft.friendly_reference:
                 lines.append(f"- Reference: {draft.friendly_reference}")
-            lines.append(f"- Payment method: {_payment_method(draft.payment_method)}")
-            if draft.skillsfuture_amount is not None:
-                lines.append(f"- SkillsFuture amount: S${_money(draft.skillsfuture_amount)}")
-            if draft.paynow_amount is not None:
-                lines.append(f"- PayNow amount: S${_money(draft.paynow_amount)}")
             lines.extend(["", "Your enrollment is confirmed ✅"])
             return "\n".join(lines)
 
         saved = []
         for field in (
             "course", "preferred_intake_date", "full_name", "nric",
-            "date_of_birth", "email", "mobile_number", "payment_method",
-            "skillsfuture_amount", "paynow_amount",
+            "date_of_birth", "email", "mobile_number",
         ):
             if getattr(draft, field, None) is not None:
                 saved.append(self.catalogue.enrollment_field_label(field))
@@ -884,16 +829,8 @@ class EnrollmentManagementService:
                 [
                     f"- Intake: {intake_display}",
                     f"- Time: {self._training_time(context, course)}",
-                    f"- Payment method: {_payment_method(draft.payment_method)}",
                 ]
             )
-            if draft.skillsfuture_amount is not None:
-                lines.append(f"- SkillsFuture amount: S${_money(draft.skillsfuture_amount)}")
-            if draft.paynow_amount is not None:
-                lines.append(f"- PayNow amount: S${_money(draft.paynow_amount)}")
-            case = FinanceCase.query.filter_by(enrollment_id=draft.id).one_or_none()
-            payment_status = case.status if case and case.status not in {"Enrolled"} else "Awaiting staff verification"
-            lines.append(f"- Payment status: {payment_status}")
             generation = InvoiceGeneration.query.filter_by(enrollment_id=draft.id).one_or_none()
             invoice_states = {
                 "generated": "Ready to download",
@@ -965,23 +902,6 @@ class EnrollmentManagementService:
         if course is None:
             return "The course fee requires staff confirmation."
         return f"The fee for {course['name']} is {self.catalogue.course_fee_display_for(course)}."
-
-    def participant_payment_reply(self, context):
-        if context.ambiguous:
-            return self.resolver.clarification_reply(context)
-        if context.enrollment is None:
-            return "Please tell me which course you mean so I can confirm its payment options."
-        course = context.course or self.catalogue.course_for(
-            context.enrollment.course_id or context.enrollment.course
-        )
-        if course is None:
-            return "The payment options require staff confirmation."
-        payment = course.get("payment", {})
-        options = payment.get("customer_reply")
-        if not options:
-            methods = payment.get("accepted_methods", [])
-            options = ", ".join(methods) if methods else "Staff confirmation is required."
-        return f"For {course['name']}: {options}"
 
     @staticmethod
     def _training_time(context, course):
@@ -1631,14 +1551,6 @@ def is_participant_fee_query(message):
     )
 
 
-def is_participant_payment_query(message):
-    text = _normalise(message)
-    return bool(
-        re.search(r"\b(?:my|this) course\b", text)
-        and re.search(r"\b(?:pay|payment|paynow|skillsfuture|utap)\b", text)
-    )
-
-
 def is_invoice_resend_request(message):
     text = _normalise(message)
     return any(
@@ -1661,7 +1573,7 @@ def is_general_change_request(message):
     text = _normalise(message)
     return bool(
         re.search(
-            r"\b(?:change|update|correct) (?:my )?(?:enrolment|enrollment|details|course|payment method)\b",
+            r"\b(?:change|update|correct) (?:my )?(?:enrolment|enrollment|details|course)\b",
             text,
         )
         or "change or cancel" in text
@@ -1682,7 +1594,7 @@ def is_specific_change_request(message):
     return bool(
         re.search(
             r"\b(?:change|update|correct) (?:my )?"
-            r"(?:name|email|e mail|mobile|phone|date of birth|dob|payment|skillsfuture|paynow)\b",
+            r"(?:name|email|e mail|mobile|phone|date of birth|dob)\b",
             text,
         )
     )
@@ -1721,9 +1633,7 @@ def _change_option(message):
         return "course"
     if text in {"3", "intake", "intake date", "date"}:
         return "intake"
-    if text in {"4", "payment", "payment method", "payment allocation"}:
-        return "payment"
-    if text in {"5", "cancel", "cancel enrollment", "cancel enrolment"}:
+    if text in {"4", "cancel", "cancel enrollment", "cancel enrolment"}:
         return "cancel"
     return None
 
@@ -1787,19 +1697,6 @@ def _first_name(full_name):
     return full_name.split()[0] if full_name else None
 
 
-def _money(value):
-    return f"{Decimal(str(value)):.2f}"
-
-
-def _payment_method(value):
-    return {
-        "paynow": "PayNow",
-        "skillsfuture_paynow": "SkillsFuture Credits and PayNow",
-        "skillsfuture": "SkillsFuture Credits",
-        "utap": "PayNow with UTAP reimbursement after course completion",
-    }.get(value, "Not selected")
-
-
 def _mask_email(value):
     local, separator, domain = str(value or "").partition("@")
     if not separator:
@@ -1827,8 +1724,6 @@ def _safe_change_display(field, value):
     if field == "mobile_number":
         digits = str(value)
         return f"****{digits[-4:]}"
-    if field in {"skillsfuture_amount", "paynow_amount"}:
-        return f"S${Decimal(str(value)):.2f}"
     if field == "date_of_birth":
         return "Updated date provided"
     return str(value)

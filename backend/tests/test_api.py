@@ -70,8 +70,14 @@ def test_messages_are_persisted_and_reloadable(client, conversation_id):
         "What is the duration of the 2-Day Basic Certificate in Dental Assisting?",
     ).status_code == 200
     history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
-    assert [message["role"] for message in history["messages"]] == ["user", "assistant"]
-    assert "two consecutive training days" in history["messages"][1]["content"].casefold()
+    messages = history["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert [message["sequence"] for message in messages] == [1, 2]
+    assert [message["outcome_status"] for message in messages] == ["success", "success"]
+    assert all(message["agent_name"] == "faq_agent" for message in messages)
+    assert all(message["detected_intent"] == "faq" for message in messages)
+    assert all(message["error_category"] is None for message in messages)
+    assert "two consecutive training days" in messages[1]["content"].casefold()
 
 
 def test_previous_chat_list_is_owned_ordered_and_masks_nric(app, client):
@@ -119,7 +125,10 @@ def test_history_survives_a_new_application_instance(tmp_path, fake_ai):
         f"/api/conversations/{conversation_id}/messages"
     )
     assert reloaded.status_code == 200
-    assert len(reloaded.get_json()["messages"]) == 2
+    messages = reloaded.get_json()["messages"]
+    assert len(messages) == 2
+    assert [message["sequence"] for message in messages] == [1, 2]
+    assert [message["outcome_status"] for message in messages] == ["success", "success"]
 
 
 def test_pending_course_offer_survives_restart_logout_and_login(tmp_path, fake_ai):
@@ -226,6 +235,30 @@ def test_nric_is_masked_in_history_agent_context_and_logs(
     assert "S1234567D" not in caplog.text
 
 
+def test_identity_and_contact_values_are_redacted_at_ai_and_log_boundaries(
+    client, conversation_id, fake_ai, caplog
+):
+    send(client, conversation_id, "I want to enroll")
+    message = (
+        "Full name: Avery Tan; NRIC: S1234567D; Date of birth: 2000-05-15; "
+        "Email: avery.private@example.com; Mobile: 91234567"
+    )
+    assert send(client, conversation_id, message).status_code == 200
+
+    call = fake_ai.enrollment_calls[-1]
+    protected_values = (
+        "Avery Tan",
+        "S1234567D",
+        "2000-05-15",
+        "avery.private@example.com",
+        "91234567",
+    )
+    for value in protected_values:
+        assert value not in call["message"]
+        assert value not in call["context"]
+        assert value not in caplog.text
+
+
 def test_context_is_bounded(tmp_path, fake_ai):
     app = create_app(
         {
@@ -280,3 +313,10 @@ def test_provider_failure_does_not_leak_details_or_secret(tmp_path):
     assert response.status_code == 502
     assert "provider detail" not in rendered
     assert secret not in rendered
+    history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
+    assert len(history["messages"]) == 1
+    failed_turn = history["messages"][0]
+    assert failed_turn["role"] == "user"
+    assert failed_turn["sequence"] == 1
+    assert failed_turn["outcome_status"] == "error"
+    assert failed_turn["error_category"] == "ai_service"

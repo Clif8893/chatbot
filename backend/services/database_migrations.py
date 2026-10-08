@@ -1,5 +1,9 @@
 """Small additive migrations for databases created before migration tooling existed."""
 
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
 from sqlalchemy import inspect, text
 
 from backend.extensions import db
@@ -55,6 +59,9 @@ MESSAGE_COLUMNS = {
     "image_url": "VARCHAR(500)",
     "image_alt": "VARCHAR(500)",
     "image_status": "VARCHAR(64)",
+    "sequence": "INTEGER DEFAULT 0 NOT NULL",
+    "outcome_status": "VARCHAR(32)",
+    "error_category": "VARCHAR(64)",
 }
 
 MASTER_INVOICE_EXPORT_COLUMNS = {
@@ -170,6 +177,28 @@ def apply_additive_migrations():
                             f"{name} {column_type}"
                         )
                     )
+            connection.execute(
+                text(
+                    "WITH ordered AS ("
+                    "SELECT id, ROW_NUMBER() OVER (PARTITION BY conversation_id "
+                    "ORDER BY created_at, id) AS ordered_sequence FROM messages"
+                    ") UPDATE messages SET sequence = (SELECT ordered_sequence "
+                    "FROM ordered WHERE ordered.id = messages.id) "
+                    "WHERE sequence IS NULL OR sequence = 0"
+                )
+            )
+            connection.execute(
+                text(
+                    "UPDATE messages SET outcome_status = 'historical' "
+                    "WHERE outcome_status IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_messages_conversation_sequence "
+                    "ON messages (conversation_id, sequence)"
+                )
+            )
 
         if "course_dates" in tables:
             existing = {
@@ -316,4 +345,41 @@ def apply_additive_migrations():
             )
 
 
-__all__ = ["apply_additive_migrations"]
+def backup_sqlite_before_schema_sync():
+    """Create a consistent copy before create_all or additive ALTER statements."""
+    url = db.engine.url
+    if url.get_backend_name() != "sqlite":
+        return None
+    database = url.database
+    if not database or database == ":memory:":
+        return None
+    source = Path(database).resolve()
+    if not source.is_file() or source.stat().st_size == 0:
+        return None
+
+    inspector = inspect(db.engine)
+    existing_tables = set(inspector.get_table_names())
+    if not existing_tables:
+        return None
+    expected_tables = set(db.metadata.tables)
+    schema_change_needed = bool(expected_tables - existing_tables)
+    if not schema_change_needed:
+        for table_name in existing_tables & expected_tables:
+            actual = {column["name"] for column in inspector.get_columns(table_name)}
+            expected = set(db.metadata.tables[table_name].columns.keys())
+            if expected - actual:
+                schema_change_needed = True
+                break
+    if not schema_change_needed:
+        return None
+
+    backup_dir = source.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    destination = backup_dir / f"{source.stem}-pre-migration-{stamp}{source.suffix}"
+    with sqlite3.connect(source) as source_db, sqlite3.connect(destination) as backup_db:
+        source_db.backup(backup_db)
+    return destination
+
+
+__all__ = ["apply_additive_migrations", "backup_sqlite_before_schema_sync"]

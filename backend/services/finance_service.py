@@ -109,9 +109,6 @@ class FinanceService:
         signature = current_app.config.get("FINANCE_SIGNATURE_PATH") or current_app.config.get("INVOICE_SIGNATURE_PATH")
         if not signature or not Path(signature).is_file():
             result.append("Approved invoice signature asset is missing")
-        qr = current_app.config.get("PAYNOW_QR_PATH")
-        if not qr or not Path(qr).is_file():
-            result.append("Approved PayNow QR asset is missing")
         if not draft.preferred_intake_date:
             result.append("Course date must be confirmed by staff")
         if draft.status not in {'confirmed', 'paid', 'receipt_issued'}:
@@ -133,12 +130,6 @@ class FinanceService:
         if selected_fee is None:
             raise ValueError("The approved course fee must be confirmed before invoicing")
         fee = money(selected_fee)
-        sfc = money(draft.skillsfuture_amount or 0)
-        paynow = money(draft.paynow_amount if draft.paynow_amount is not None else fee - sfc)
-        if sfc + paynow != fee:
-            raise ValueError("SkillsFuture and PayNow amounts must total the course fee")
-        if draft.payment_method in {"paynow", "utap"} and sfc:
-            raise ValueError("This payment method does not allow a SkillsFuture claim")
         uen = selected_course.get("paynow", {}).get("uen")
         if not uen:
             raise ValueError("Approved PayNow recipient UEN is required")
@@ -150,7 +141,7 @@ class FinanceService:
         )
         invoice = Invoice(enrollment_id=draft.id, number=invoice_number,
                           course_name=draft.course, participant_name=draft.full_name, course_date=draft.preferred_intake_date,
-                          course_fee=fee, skillsfuture_amount=sfc, net_payable=paynow, recipient_uen=uen,
+                          course_fee=fee, skillsfuture_amount=Decimal("0.00"), net_payable=fee, recipient_uen=uen,
                           due_date=date.today() + timedelta(days=int(current_app.config.get("PAYMENT_DUE_DAYS", 14))))
         db.session.add(invoice)
         db.session.flush()
@@ -172,37 +163,23 @@ class FinanceService:
         if document.kind == "invoice":
             subject = f"Q&M course invoice {invoice.number}"
             body = (f"Dear {draft.full_name},\n\nYour course invoice is attached. Course date: {iso(invoice.course_date)}.\n"
-                    f"Course fee: S${invoice.course_fee:.2f}. PayNow payable: S${invoice.net_payable:.2f}. "
+                    f"Total amount due: S${invoice.course_fee:.2f}. "
                     f"UEN: {invoice.recipient_uen}. Use reference {invoice.number}.\n")
             if skillsfuture.get("basic_tier_accepted"):
-                body += (f"Proposed SkillsFuture claim: S${invoice.skillsfuture_amount:.2f}; subject to approval.\n"
-                         f"SkillsFuture instructions: sign in yourself to the official MySkillsFuture portal, check your basic-tier balance, "
+                body += (f"SkillsFuture instructions: sign in yourself to the official MySkillsFuture portal, check your basic-tier balance, "
                          f"select the course/intake and submit the claim with the attached invoice: {portal}\n"
                          "Do not send us your Singpass password or OTP. Mid-Career Credits are not accepted for this course.\n")
-            body += "Email is preferred for payment evidence. Reply with your payment screenshot by email or send it through WhatsApp; no special caption is required.\n"
         else:
             subject = f"Q&M {document.kind.replace('_', ' ')} {document.number}"
             body = f"Dear {draft.full_name},\n\nYour {document.kind.replace('_', ' ')} for invoice {invoice.number} is attached.\n\nQ&M Course Administration"
         attachments = [{"filename": f"{document.number}-v{document.version}.pdf", "storage_key": document.storage_key, "mime_type": "application/pdf", "content_type": "application/pdf"}]
-        if document.kind == "invoice":
-            qr = Path(current_app.config["PAYNOW_QR_PATH"])
-            import mimetypes
-            attachments.append({"filename": f"PayNow-QR{qr.suffix}", "storage_key": self.storage.save(qr.read_bytes()), "content_type": mimetypes.guess_type(qr.name)[0] or "image/png"})
-            instructions = current_app.config.get("SKILLSFUTURE_INSTRUCTIONS_PATH")
-            if skillsfuture.get("basic_tier_accepted") and instructions:
-                path = Path(instructions)
-                if not path.is_file():
-                    raise ValueError("Approved SkillsFuture instructions file is unavailable")
-                attachments.append({"filename": "SkillsFuture-claim-instructions.pdf", "storage_key": self.storage.save(path.read_bytes()), "content_type": "application/pdf"})
-            elif skillsfuture.get("basic_tier_accepted"):
-                attachments.append({'filename': 'SkillsFuture-claim-instructions.pdf', 'storage_key': self.storage.save(self.documents.render_claim_instructions(course)), 'content_type': 'application/pdf'})
         outbound = self.delivery.queue("email", draft.email, subject, body, attachments=attachments, conversation_id=draft.conversation_id, purpose=document.kind)
         document.delivery_id = outbound.id
         if document.kind == "invoice":
             invoice.delivery_id = outbound.id
             if draft.mobile_number:
                 self.delivery.queue("whatsapp", draft.mobile_number, None,
-                    f"Enrollment recorded: {draft.course}, {iso(invoice.course_date)}, {draft.full_name}. Invoice {invoice.number} is queued for delivery to {draft.email}. PayNow payable S${invoice.net_payable:.2f}.",
+                    f"Enrollment recorded: {draft.course}, {iso(invoice.course_date)}, {draft.full_name}. Invoice {invoice.number} for S${invoice.course_fee:.2f} is queued for delivery to {draft.email}.",
                     conversation_id=draft.conversation_id, purpose="enrollment_confirmation")
         self._audit(draft, "document_queued", document_id=document.id, delivery_id=outbound.id)
         return outbound

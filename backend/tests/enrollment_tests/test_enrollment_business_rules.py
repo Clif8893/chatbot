@@ -122,9 +122,6 @@ def test_placeholder_or_numbers_only_names_are_rejected(value):
         ("mobile_number", "9123"),
         ("nric", "S1234567A"),
         ("nric", "S*******D"),
-        ("skillsfuture_amount", "-1"),
-        ("paynow_amount", "six hundred"),
-        ("paynow_amount", "601"),
     ],
 )
 def test_logically_invalid_field_values_are_rejected(field, value):

@@ -163,7 +163,7 @@ def confirmed_enrollment(
     ("skillsfuture", "paynow"),
     [("0.00", "600.00"), ("600.00", "0.00"), ("400.00", "200.00")],
 )
-def test_generates_official_template_pdf_with_existing_number_and_payment_split(
+def test_generates_official_template_pdf_for_full_course_fee_without_payment_split(
     tmp_path, fake_ai, skillsfuture, paynow
 ):
     source_eml = _test_template_eml(tmp_path)
@@ -196,9 +196,9 @@ def test_generates_official_template_pdf_with_existing_number_and_payment_split(
         assert values["C22"] == "Basic Certificate in Dental Assisting"
         assert values["C26"] == "8–9 February 2027"
         assert values["H30"] == 600.0
-        assert values["H31"] == float(skillsfuture)
-        assert values["H33"] == float(paynow)
-        assert values["H36"] == "=SUM(H31,H33)"
+        assert values["H31"] is None
+        assert values["H33"] is None
+        assert values["H36"] == "=H30"
         assert values["_sheetnames"] == ("Invoice",)
         assert values["_image_count"] == 1
         assert "A5:K5" in values["_merged_ranges"]

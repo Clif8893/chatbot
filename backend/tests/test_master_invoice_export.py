@@ -238,7 +238,7 @@ def test_master_invoice_endpoints_are_accounting_only_and_audited(
         assert "regenerate" in actions
 
 
-def test_incomplete_invalid_dob_and_invalid_payment_are_never_exported(
+def test_incomplete_and_invalid_dob_are_rejected_but_historical_payment_is_preserved(
     tmp_path, fake_ai
 ):
     app = export_app(tmp_path, fake_ai)
@@ -259,10 +259,16 @@ def test_incomplete_invalid_dob_and_invalid_payment_are_never_exported(
     )
     with app.app_context():
         service = app.extensions["master_invoice"]
-        for enrollment_id in (incomplete_id, future_dob_id, invalid_payment_id):
+        for enrollment_id in (incomplete_id, future_dob_id):
             assert service.export_confirmed_enrollment(enrollment_id) is False
-        assert MasterInvoiceExport.query.count() == 0
-        assert not service.workbook_path.exists()
+        assert service.export_confirmed_enrollment(invalid_payment_id) is True
+        assert MasterInvoiceExport.query.count() == 1
+        assert service.workbook_path.exists()
+    workbook = load_workbook(service.workbook_path)
+    sheet = workbook[SHEET_NAME]
+    assert sheet.cell(2, 18).value == 500
+    assert sheet.cell(2, 19).value == 300
+    assert sheet.cell(2, 20).value == 800
 
 
 def test_supported_payment_allocations_export_as_numeric_cells(tmp_path, fake_ai):

@@ -93,7 +93,7 @@ class CourseCatalogue:
         if topic == "paynow":
             return course.get("paynow", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
         if topic == "payment":
-            options = course.get("enrollment", {}).get("payment_options", [])
+            options = course.get("payment_options", [])
             if options:
                 return f"Payment options for {name}: " + "; ".join(options) + "."
             return self._data["reply_style"]["staff_confirmation_message"]
@@ -420,7 +420,7 @@ class CourseCatalogue:
 
     @property
     def payment_question(self):
-        return self.course["enrollment"]["payment_question"]
+        return self.course.get("enrollment", {}).get("payment_question", "")
 
     def payment_question_for(self, course_value):
         course = self.course_for(course_value) or self.course
@@ -483,14 +483,12 @@ class CourseCatalogue:
         course = self.course_for(course_value)
         if not course:
             return self.staff_confirmation_message
-        payment = ", ".join(course.get("enrollment", {}).get("payment_options", []))
         return (
             f"📚 {course['name']}\n\n"
             f"{course.get('overview', '')}\n\n"
             f"- Course fee: {course['fee']['display']}\n"
             f"- Duration: {course['duration'].capitalize()}\n"
             f"- Training hours: {course['training_time']}\n"
-            f"- Payment: {payment or 'Staff confirmation required'}\n"
             f"- SkillsFuture: {self.skillsfuture_display_for(course['id'])}\n"
             f"- Venue: {course.get('venue', {}).get('customer_reply', 'Confirmed with the selected intake')}"
         )

@@ -291,17 +291,15 @@ def test_intake_correction_changes_only_intake_fields(tmp_path, fake_ai):
         assert draft.nric is None
 
 
-def _complete_paynow_enrollment(client, conversation_id):
+def _complete_enrollment(client, conversation_id):
     send(client, conversation_id, "1")
-    send(
+    return send(
         client,
         conversation_id,
         "Full name: Test Student; NRIC/FIN: S1234567D; "
         "Date of birth: 15 May 2000; Email: test.student@example.com; "
         "Mobile number: 91234567",
-    )
-    send(client, conversation_id, "PayNow only")
-    return send(client, conversation_id, "S$600").get_json()
+    ).get_json()
 
 
 def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
@@ -310,7 +308,7 @@ def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
     app = demo_app(tmp_path, fake_ai)
     client = authenticated_client(app, email="confirmed-demo@example.com")
     conversation_id, _ = begin_intake_selection(client)
-    review = _complete_paynow_enrollment(client, conversation_id)
+    review = _complete_enrollment(client, conversation_id)
 
     assert review["enrollment"]["status"] == "awaiting_confirmation"
     assert "Preferred intake: 10–11 October 2026" in review["message"]["content"]
@@ -341,8 +339,10 @@ def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
     assert sheet[2][5].value.date().isoformat() == "2026-10-11"
     assert sheet[2][7].value == 600
     assert sheet[2][8].value == "S1234567D"
-    assert sheet[2][16].value == "PayNow"
-    assert sheet[2][18].value == 600
+    assert sheet[2][16].value is None
+    assert sheet[2][17].value is None
+    assert sheet[2][18].value is None
+    assert sheet[2][19].value is None
     assert sheet[2][22].value == draft.id
     assert sheet[2][23].value == DEMO_RECORDS[0][0]
     assert sheet[2][24].value == "Yes"

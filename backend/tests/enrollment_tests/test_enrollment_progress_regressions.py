@@ -99,7 +99,7 @@ def test_database_backed_intake_query_lists_all_demo_choices(tmp_path, fake_ai):
     assert fake_ai.enrollment_calls == []
 
 
-def test_invalid_payment_group_is_not_saved_or_reported_as_saved(tmp_path, fake_ai):
+def test_payment_group_is_ignored_and_not_saved(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = start_with_identity(client)
@@ -109,19 +109,18 @@ def test_invalid_payment_group_is_not_saved_or_reported_as_saved(tmp_path, fake_
         "I will use S$500 SkillsFuture and S$300 PayNow.",
     ).get_json()
     content = response["message"]["content"]
-    assert "Needs correction" in content
-    assert "total S$800" in content
-    assert "S$200 too much" in content
+    assert "Needs correction" not in content
+    assert "Payment allocation" not in content
     assert "Saved successfully" not in content
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.payment_method is None
         assert draft.skillsfuture_amount is None
         assert draft.paynow_amount is None
-        assert "payment_allocation" in draft.validation_errors
+        assert "payment_allocation" not in draft.validation_errors
 
 
-def test_corrected_payment_group_is_saved_atomically(tmp_path, fake_ai):
+def test_payment_correction_text_does_not_populate_retired_fields(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = start_with_identity(client)
@@ -135,17 +134,22 @@ def test_corrected_payment_group_is_saved_atomically(tmp_path, fake_ai):
     assert "Please review your enrolment" in corrected["message"]["content"]
     with app.app_context():
         draft = EnrollmentDraft.query.one()
-        assert str(draft.skillsfuture_amount) == "400.00"
-        assert str(draft.paynow_amount) == "200.00"
-        assert draft.payment_method == "skillsfuture_paynow"
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
+        assert draft.payment_method is None
         assert draft.validation_errors == {}
 
 
-def test_previous_valid_payment_survives_rejected_replacement(tmp_path, fake_ai):
+def test_historical_payment_fields_are_not_changed_by_enrollment_chat(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = start_with_identity(client)
-    send(client, conversation_id, "S$400 SkillsFuture and S$200 PayNow")
+    with app.app_context():
+        draft = EnrollmentDraft.query.one()
+        draft.payment_method = "skillsfuture_paynow"
+        draft.skillsfuture_amount = 400
+        draft.paynow_amount = 200
+        db.session.commit()
     rejected = send(
         client,
         conversation_id,
@@ -156,10 +160,8 @@ def test_previous_valid_payment_survives_rejected_replacement(tmp_path, fake_ai)
         draft = EnrollmentDraft.query.one()
         assert str(draft.skillsfuture_amount) == "400.00"
         assert str(draft.paynow_amount) == "200.00"
-        assert "payment_allocation" in draft.validation_errors
-    send(client, conversation_id, "Change it to S$400 SkillsFuture and S$200 PayNow")
-    with app.app_context():
-        assert EnrollmentDraft.query.one().validation_errors == {}
+        assert "payment_allocation" not in draft.validation_errors
+        assert draft.payment_method == "skillsfuture_paynow"
 
 
 def prepare_progress_draft(client):
@@ -169,8 +171,7 @@ def prepare_progress_draft(client):
         client,
         conversation_id,
         "Full name: Alex Lim; NRIC: S1234567D; DOB: 03/09/2026; "
-        "Email: alex.manual@example.com; Mobile: 91234567; "
-        "S$500 SkillsFuture and S$300 PayNow",
+        "Email: alex.manual@example.com; Mobile: 91234567",
     )
     return conversation_id
 
@@ -194,7 +195,7 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_ai(tmp_path, 
     assert "alex.manual@example.com" in content
     assert "Needs Correction" in content
     assert "Date of birth" in content
-    assert "Payment allocation" in content
+    assert "Payment allocation" not in content
     assert "Still Needed" in content
     assert "Preferred course intake/date" in content
     assert "requires the corrections shown above" in content
@@ -234,7 +235,6 @@ def test_confirmed_progress_uses_confirmed_status_wording(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = start_with_identity(client)
-    send(client, conversation_id, "S$400 SkillsFuture and S$200 PayNow")
     send(client, conversation_id, "Confirm")
     response = send(client, conversation_id, "Show my enrollment progress").get_json()
     assert "Your enrollment has been confirmed." in response["message"]["content"]
@@ -284,7 +284,6 @@ def test_valid_fields_and_selected_intake_survive_backend_restart(tmp_path, fake
     app = regression_app(tmp_path, fake_ai, name=database_name)
     client = authenticated_client(app, email="progress-restart@example.com")
     conversation_id = start_with_identity(client)
-    send(client, conversation_id, "S$400 SkillsFuture and S$200 PayNow")
 
     restarted = regression_app(tmp_path, fake_ai, name=database_name)
     resumed = restarted.test_client()
@@ -300,5 +299,5 @@ def test_valid_fields_and_selected_intake_survive_backend_restart(tmp_path, fake
         draft = EnrollmentDraft.query.one()
         assert draft.full_name == "Alex Lim"
         assert draft.nric == "S1234567D"
-        assert str(draft.skillsfuture_amount) == "400.00"
-        assert str(draft.paynow_amount) == "200.00"
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None

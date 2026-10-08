@@ -554,7 +554,7 @@ class ChatService:
         if record is None or record.status == "pending":
             return "Your invoice is being generated. Please check the invoice status again shortly."
         if record.status == "generated":
-            return "Your invoice is ready. Select Download Invoice in Enrollment & payment."
+            return "Your invoice is ready. Select Download Invoice in Enrollment & invoice."
         if record.status == "needs_review":
             return (
                 "Your invoice needs staff review before it can be downloaded. "
@@ -618,9 +618,6 @@ class ChatService:
             "date_of_birth",
             "email",
             "mobile_number",
-            "payment_method",
-            "skillsfuture_amount",
-            "paynow_amount",
         )
         return {
             "status": draft.status,
@@ -645,6 +642,9 @@ def serialize_message(message):
         "agent_name": message.agent_name,
         "detected_intent": message.detected_intent,
         "classification_confidence": message.classification_confidence,
+        "sequence": message.sequence,
+        "outcome_status": message.outcome_status,
+        "error_category": message.error_category,
         "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
     }
     if message.image_url and message.image_alt:
@@ -1048,8 +1048,5 @@ def _is_empty_course_offer_draft(draft):
             "email",
             "preferred_intake_date",
             "mobile_number",
-            "payment_method",
-            "skillsfuture_amount",
-            "paynow_amount",
         )
     )

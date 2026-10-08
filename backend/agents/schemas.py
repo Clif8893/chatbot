@@ -24,9 +24,6 @@ class EnrollmentFields(BaseModel):
     email: str | None = None
     preferred_intake_date: str | None = None
     mobile_number: str | None = None
-    payment_method: str | None = None
-    skillsfuture_amount: str | float | int | None = None
-    paynow_amount: str | float | int | None = None
 
 
 class EnrollmentExtraction(BaseModel):

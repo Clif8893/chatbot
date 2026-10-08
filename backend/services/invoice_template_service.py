@@ -289,9 +289,6 @@ class InvoiceTemplateService:
                 enrollment.mobile_number,
                 enrollment.course,
                 enrollment.course_fee is not None,
-                enrollment.payment_method,
-                enrollment.skillsfuture_amount is not None,
-                enrollment.paynow_amount is not None,
             )
         ):
             return "incomplete"
@@ -299,16 +296,9 @@ class InvoiceTemplateService:
             return "course_date"
         try:
             fee = _money(enrollment.course_fee)
-            skillsfuture = _money(enrollment.skillsfuture_amount)
-            paynow = _money(enrollment.paynow_amount)
         except ValueError:
             return "incomplete"
-        if fee <= 0 or skillsfuture + paynow != fee:
-            return "incomplete"
-        if (
-            "infection control" in str(enrollment.course).casefold()
-            and (enrollment.payment_method != "paynow" or skillsfuture != 0)
-        ):
+        if fee <= 0:
             return "incomplete"
         if not self.approved:
             return "approval"
@@ -361,19 +351,11 @@ class InvoiceTemplateService:
         _section(sheet["A5"], green)
         _label_value(sheet, 7, "A", "Invoice number:", "C", invoice_number, end="E")
         _label_value(sheet, 7, "G", "Invoice date:", "I", invoice_date, end="K", date_cell=True)
-        _label_value(
-            sheet, 9, "A", "Enrollment reference:", "C",
-            enrollment.friendly_reference or enrollment.id, end="E"
-        )
-        _label_value(sheet, 9, "G", "Payment status:", "I", "Awaiting staff verification", end="K")
-
         sheet.merge_cells("A12:K12")
         sheet["A12"] = "BILL TO"
         _section(sheet["A12"], green)
         _label_value(sheet, 14, "A", "Participant name:", "C", enrollment.full_name, end="F")
         _label_value(sheet, 14, "G", "NRIC/FIN:", "I", mask_nric(enrollment.nric), end="K")
-        _label_value(sheet, 16, "A", "Email:", "C", enrollment.email, end="F")
-        _label_value(sheet, 16, "G", "Mobile:", "I", enrollment.mobile_number, end="K")
 
         sheet.merge_cells("A18:K18")
         sheet["A18"] = "COURSE DETAILS"
@@ -384,16 +366,12 @@ class InvoiceTemplateService:
         _label_value(sheet, 24, "A", "Course code:", "C", course_code, end="E")
         _label_value(sheet, 24, "G", "Training time:", "I", "9:30am–5:30pm", end="K")
         _label_value(sheet, 26, "A", "Training date(s):", "C", _date_range(intake_date, intake_end), end="E")
-        _label_value(sheet, 26, "G", "Venue:", "I", "Confirmed with selected intake", end="K")
-
         sheet.merge_cells("A29:K29")
-        sheet["A29"] = "PAYMENT SUMMARY"
+        sheet["A29"] = "AMOUNT DUE"
         _section(sheet["A29"], green)
         payment_rows = (
             (30, "Course fee", _money(enrollment.course_fee)),
-            (31, "SkillsFuture amount", _money(enrollment.skillsfuture_amount)),
-            (33, "PayNow amount", _money(enrollment.paynow_amount)),
-            (36, "Total", _money(enrollment.skillsfuture_amount) + _money(enrollment.paynow_amount)),
+            (36, "Total amount due", _money(enrollment.course_fee)),
         )
         for row, label, amount in payment_rows:
             sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
@@ -402,7 +380,7 @@ class InvoiceTemplateService:
             amount_cell = sheet.cell(
                 row,
                 8,
-                "=SUM(H31,H33)" if row == 36 else float(amount),
+                "=H30" if row == 36 else float(amount),
             )
             amount_cell.number_format = '"S$"#,##0.00'
             amount_cell.alignment = Alignment(horizontal="right")
@@ -434,9 +412,7 @@ class InvoiceTemplateService:
         sheet["A48"] = _safe_excel_text(enrollment.course)
         sheet["I48"] = float(_money(enrollment.course_fee))
         sheet["A49"] = intake_date
-        sheet["I50"] = "=SUM(H31,H33)"
-        sheet["I51"] = float(_money(enrollment.skillsfuture_amount))
-        sheet["I52"] = float(_money(enrollment.paynow_amount))
+        sheet["I50"] = "=H30"
 
         sheet.sheet_view.showGridLines = False
         sheet.print_area = "A1:K43"

@@ -201,7 +201,7 @@ def test_progress_variants_are_deterministic_and_draft_grounded(
     assert "test.student@example.com" in content
     assert "Still Needed" in content
     assert "Full name" in content
-    assert "Payment method" in content
+    assert "Payment method" not in content
     assert "SkillsFuture amount" not in content
     assert "PayNow amount" not in content
     assert "Course Fee" not in content
@@ -225,20 +225,9 @@ def test_repeated_progress_is_consistent_and_masks_nric(tmp_path, fake_ai):
     assert len(fake_ai.classify_calls) == 0
 
 
-@pytest.mark.parametrize(
-    ("payment_method", "expected", "unexpected"),
-    [
-        (None, ("Payment method",), ("SkillsFuture amount", "PayNow amount")),
-        ("paynow", ("PayNow amount",), ("SkillsFuture amount",)),
-        (
-            "skillsfuture_paynow",
-            ("SkillsFuture amount", "PayNow amount"),
-            (),
-        ),
-    ],
-)
-def test_progress_payment_fields_follow_selected_method(
-    tmp_path, fake_ai, payment_method, expected, unexpected
+@pytest.mark.parametrize("payment_method", [None, "paynow", "skillsfuture_paynow"])
+def test_progress_never_surfaces_historical_payment_fields(
+    tmp_path, fake_ai, payment_method
 ):
     app = context_app(tmp_path, fake_ai)
     client = authenticated_client(app)
@@ -248,9 +237,7 @@ def test_progress_payment_fields_follow_selected_method(
     content = send(client, conversation_id, "What's left?").get_json()["message"][
         "content"
     ]
-    for label in expected:
-        assert label in content
-    for label in unexpected:
+    for label in ("Payment method", "SkillsFuture amount", "PayNow amount"):
         assert label not in content
 
 
@@ -338,7 +325,7 @@ def test_ambiguous_fallback_receives_masked_scoped_context(tmp_path, fake_ai):
     )
     fake_ai.classify_calls.clear()
 
-    send(client, conversation_id, "Maybe later")
+    send(client, conversation_id, "I am undecided")
     call = fake_ai.classify_calls[-1]
     assert OLD_NRIC not in call["context"]
     assert OLD_NRIC not in call["message"]
@@ -350,6 +337,6 @@ def test_ambiguous_fallback_receives_masked_scoped_context(tmp_path, fake_ai):
     ):
         assert sensitive_value not in call["context"]
     assert call["active_intent"] == "enrollment"
-    assert call["draft_summary"]["status"] == "collecting"
+    assert call["draft_summary"]["status"] == "awaiting_confirmation"
     assert "nric" in call["draft_summary"]["saved_fields"]
     assert OLD_NRIC not in str(call["draft_summary"])

@@ -45,19 +45,25 @@ class DocumentService:
         document_number = number or invoice.number
         story.extend([p(f"Document number: {document_number}", "Muted"), p(f"Issued: {(invoice.created_at if kind == 'invoice' else utc_now()).date().isoformat()}", "Muted"), Spacer(1, 5 * mm)])
         draft = invoice.enrollment
-        for heading, value in [("Participant", invoice.participant_name), ("NRIC / FIN", mask_nric(draft.nric)), ("Email", draft.email), ("Course", invoice.course_name), ("Course date", invoice.course_date.isoformat() if invoice.course_date else "To be confirmed by Q&M")]:
+        for heading, value in [("Participant", invoice.participant_name), ("NRIC / FIN", mask_nric(draft.nric)), ("Course", invoice.course_name), ("Course date", invoice.course_date.isoformat() if invoice.course_date else "To be confirmed by Q&M")]:
             story.append(p(f"{heading}: {value}"))
             story.append(Spacer(1, 2 * mm))
         story.append(Spacer(1, 6 * mm))
-        funding_label = "SkillsFuture Credit confirmed" if kind == "receipt" else "Proposed SkillsFuture Credit claim*"
-        fee_rows = [[p("FEE BREAKDOWN"), p("SGD", "Right")], [p("Course fee (nett)"), p(f"{invoice.course_fee:.2f}", "Right")], [p(funding_label), p(f"{invoice.skillsfuture_amount:.2f}", "Right")], [p("PayNow payable"), p(f"{invoice.net_payable:.2f}", "Right")]]
+        fee_rows = [[p("FEE BREAKDOWN"), p("SGD", "Right")], [p("Course fee (nett)"), p(f"{invoice.course_fee:.2f}", "Right")]]
+        if kind == "invoice":
+            fee_rows.append([p("Total amount due"), p(f"{invoice.course_fee:.2f}", "Right")])
+        else:
+            fee_rows.extend([
+                [p("SkillsFuture Credit confirmed"), p(f"{invoice.skillsfuture_amount:.2f}", "Right")],
+                [p("PayNow received"), p(f"{invoice.net_payable:.2f}", "Right")],
+            ])
         if kind == "receipt":
             fee_rows.append([p("Full course fee received"), p(f"{invoice.course_fee:.2f}", "Right")])
         if kind == "credit_note":
             fee_rows.append([p("Invoice cancelled - course fee credited"), p(f"{invoice.course_fee:.2f}", "Right")])
         table = Table(fee_rows, colWidths=[124 * mm, 46 * mm])
         table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e6f1f1")), ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("TOPPADDING", (0, 0), (-1, -1), 7), ("LINEBELOW", (0, -1), (-1, -1), 1, teal), ("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        funding_note = "All invoice payment components have been recorded as confirmed by the payment verification or accounts reconciliation workflow." if kind == "receipt" else "*A proposed SkillsFuture Credit claim is subject to approval. Credit is not treated as received until accounts confirms the claim."
+        funding_note = "All payment components have been recorded as confirmed by the payment verification or accounts reconciliation workflow." if kind == "receipt" else "This invoice shows the full course fee. It does not record a payment selection or claim that payment has been received."
         story.extend([table, Spacer(1, 5 * mm), p(funding_note, "Muted"), Spacer(1, 6 * mm)])
         if kind == "invoice":
             story.extend([p("PAYMENT INSTRUCTIONS", "Heading2"), p(f"PayNow UEN: {invoice.recipient_uen}"), p(f"Include invoice {invoice.number} as the payment reference."), p(f"Payment due: {invoice.due_date.isoformat()}"), Spacer(1, 3 * mm)])
@@ -104,7 +110,7 @@ class DocumentService:
                  '3. Select the approved course and confirmed intake, and submit your claim using the attached invoice and the amount you confirmed with course administration.',
                  course['skillsfuture']['claim_page'],
                  '4. Pay any remaining amount through PayNow using the approved UEN and QR supplied with your invoice. Include your invoice number as the payment reference.',
-                 '5. Email your claim or payment screenshot to course administration. Email is preferred; WhatsApp evidence is also accepted. Pending claims require accounts confirmation.',
+                 '5. Complete any follow-up requested by course administration. Pending claims require accounts confirmation.',
                  'Participants are responsible for checking eligibility and completing their own claim. Q&M does not access your government account or submit claims for you.']
         for line in lines:
             paragraphs.extend([Spacer(1, 4 * mm), Paragraph(escape(line), styles['Normal'])])

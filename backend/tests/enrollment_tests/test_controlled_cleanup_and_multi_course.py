@@ -43,6 +43,7 @@ def test_course_choice_and_infection_control_rules(tmp_path, fake_ai):
     assert "15 November 2026" in selected
     assert "10–11 October 2026" not in selected
     assert not any(word in selected.casefold() for word in ("prototype", "testing note", "fictional"))
+    assert not any(word in selected.casefold() for word in ("paynow", "skillsfuture", "utap"))
 
     send(client, conversation_id, "1")
     ready = send(
@@ -61,12 +62,12 @@ def test_course_choice_and_infection_control_rules(tmp_path, fake_ai):
         assert draft.friendly_reference.startswith("ENR-2026-")
         assert draft.course == "1-Day Dental Infection Control & Sterilisation Workshop"
         assert draft.course_fee == Decimal("350.00")
-        assert draft.payment_method == "paynow"
-        assert draft.skillsfuture_amount == Decimal("0.00")
-        assert draft.paynow_amount == Decimal("350.00")
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
-def test_infection_control_rejects_skillsfuture(tmp_path, fake_ai):
+def test_infection_control_payment_preference_is_not_collected(tmp_path, fake_ai):
     app = _app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
@@ -74,8 +75,12 @@ def test_infection_control_rejects_skillsfuture(tmp_path, fake_ai):
     send(client, conversation_id, "infection control workshop")
     send(client, conversation_id, "18 October 2026")
     reply = send(client, conversation_id, "I want to use SkillsFuture").get_json()["message"]["content"]
-    assert "payable in full by PayNow" in reply
-    assert "not currently available" in reply
+    assert "Payment method" not in reply
+    assert "SkillsFuture amount" not in reply
+    with app.app_context():
+        draft = EnrollmentDraft.query.one()
+        assert draft.full_name is None
+        assert draft.payment_method is None
 
 
 def test_cleanup_is_guarded_backed_up_and_preserves_accounts_and_courses(tmp_path, fake_ai):

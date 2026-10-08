@@ -23,16 +23,10 @@ IDENTITY_FIELDS = (
     "email",
     "mobile_number",
 )
-PAYMENT_FIELDS = (
-    "payment_method",
-    "skillsfuture_amount",
-    "paynow_amount",
-)
 ENROLLMENT_FIELDS = (
     "course",
     "preferred_intake_date",
     *IDENTITY_FIELDS,
-    *PAYMENT_FIELDS,
 )
 FINAL_STATUSES = {"confirmed", "awaiting_course_date"}
 INTAKE_SELECTION_FOLLOWUP = "intake_selection"
@@ -89,6 +83,8 @@ class EnrollmentService:
         correction_requested = (
             extraction.correction_requested or is_explicit_correction(message)
         )
+        if _is_retired_payment_only(message):
+            correction_requested = False
 
         if draft.status in FINAL_STATUSES and not supplied_fields:
             return self._already_confirmed_reply(draft), draft
@@ -111,7 +107,7 @@ class EnrollmentService:
                 saved["course"] = normalized
         elif draft.course is None and any(
             field in supplied_fields
-            for field in (*IDENTITY_FIELDS, *PAYMENT_FIELDS, "preferred_intake_date")
+            for field in (*IDENTITY_FIELDS, "preferred_intake_date")
         ):
             self._save_course(draft, self.catalogue.course_name)
             saved["course"] = draft.course
@@ -134,7 +130,7 @@ class EnrollmentService:
             supplied_fields.pop("preferred_intake_date")
 
         for field in ENROLLMENT_FIELDS:
-            if field == "course" or field in PAYMENT_FIELDS or field not in supplied_fields:
+            if field == "course" or field not in supplied_fields:
                 continue
             normalized, error = validate_field(
                 field,
@@ -148,21 +144,9 @@ class EnrollmentService:
             else:
                 saved[field] = normalized
 
-        payment_updates, payment_saved, payment_invalid = self._validate_payment_update(
-            draft,
-            {
-                field: supplied_fields[field]
-                for field in PAYMENT_FIELDS
-                if field in supplied_fields
-            },
-        )
-        invalid.extend(payment_invalid)
-        saved.update(payment_saved)
-
         persisted_updates = {
             key: value for key, value in saved.items() if key != "course"
         }
-        persisted_updates.update(payment_updates)
         if persisted_updates:
             self.repository.update_draft(
                 draft, persisted_updates
@@ -279,20 +263,7 @@ class EnrollmentService:
         identity_missing = [
             field for field in IDENTITY_FIELDS if getattr(draft, field) is None
         ]
-        if identity_missing:
-            return identity_missing
-        if draft.payment_method is None:
-            return ["payment_method"]
-        if draft.payment_method == "paynow":
-            return ["paynow_amount"] if draft.paynow_amount is None else []
-        if draft.payment_method == "skillsfuture_paynow":
-            if draft.skillsfuture_amount is None:
-                return ["skillsfuture_amount"]
-            if draft.paynow_amount is None:
-                return ["paynow_amount"]
-        if draft.payment_method == "utap" and draft.paynow_amount is None:
-            return ["paynow_amount"]
-        return []
+        return identity_missing
 
     def next_step_prompt(self, draft):
         """Return a short reminder for deterministic greeting interruptions."""
@@ -334,21 +305,6 @@ class EnrollmentService:
                 f"- {self.catalogue.enrollment_field_label('preferred_intake_date')}: "
                 f"{self._intake_display(draft)}"
             )
-        if draft.payment_method is not None:
-            saved_items.append(
-                f"- {self.catalogue.enrollment_field_label('payment_method')}: "
-                f"{_payment_method_label(draft.payment_method)}"
-            )
-        if draft.skillsfuture_amount is not None:
-            saved_items.append(
-                f"- {self.catalogue.enrollment_field_label('skillsfuture_amount')}: "
-                f"{_display_amount(draft.skillsfuture_amount)}"
-            )
-        if draft.paynow_amount is not None:
-            saved_items.append(
-                f"- {self.catalogue.enrollment_field_label('paynow_amount')}: "
-                f"{_display_amount(draft.paynow_amount)}"
-            )
         if saved_items:
             sections.append("✅ Saved Information\n\n" + "\n".join(saved_items))
 
@@ -364,8 +320,6 @@ class EnrollmentService:
             field for field in self.all_missing_fields(draft)
             if field not in errors
         ]
-        if "payment_allocation" in errors:
-            missing = [field for field in missing if field not in PAYMENT_FIELDS]
         if missing:
             missing_items = "\n".join(
                 f"- {self.catalogue.enrollment_field_label(field)}"
@@ -525,17 +479,6 @@ class EnrollmentService:
         missing.extend(
             field for field in IDENTITY_FIELDS if getattr(draft, field) is None
         )
-        if draft.payment_method is None:
-            missing.append("payment_method")
-        elif draft.payment_method == "paynow" and draft.paynow_amount is None:
-            missing.append("paynow_amount")
-        elif draft.payment_method == "skillsfuture_paynow":
-            if draft.skillsfuture_amount is None:
-                missing.append("skillsfuture_amount")
-            if draft.paynow_amount is None:
-                missing.append("paynow_amount")
-        elif draft.payment_method == "utap" and draft.paynow_amount is None:
-            missing.append("paynow_amount")
         return missing
 
     @staticmethod
@@ -565,18 +508,13 @@ class EnrollmentService:
             f"- Duration: {primary['duration'].capitalize()}\n"
             "- Available intake: Awaiting staff confirmation\n\n"
             "Once you choose, I’ll collect the required details, including:\n"
-            "NRIC/FIN:\nDate of birth:\nEmail address:\nMobile number:\n"
-            "Payment method:\nSkillsFuture amount, if applicable:\nPayNow amount, if applicable:"
+            "Full name as shown on NRIC:\nNRIC/FIN:\nDate of birth:\nEmail address:\nMobile number:\n"
+            "Preferred intake/date:"
         )
 
     def _selected_course_intro(self, course_value):
         course = self.catalogue.course_for(course_value) or self.catalogue.course
         code = course.get("code")
-        fee = (
-            self.catalogue.course_fee_display
-            if self.catalogue.course_fee is not None
-            else "Awaiting staff confirmation"
-        )
         lines = [
             "📚 Enrollment Started",
             "",
@@ -589,7 +527,6 @@ class EnrollmentService:
                 f"- Course fee: {self.catalogue.course_fee_display_for(course_value)}",
                 f"- Duration: {course['duration'].capitalize()}",
                 f"- Available intake: {', '.join(item['display_date'] for item in self.catalogue.selectable_intakes_for(course_value))}",
-                f"- SkillsFuture eligibility: {self.catalogue.skillsfuture_display_for(course_value)}",
             )
         )
         return "\n".join(lines)
@@ -630,9 +567,7 @@ class EnrollmentService:
                 ),
                 missing_template=self._participant_template(missing_identity),
             )
-        if missing == ["payment_method"]:
-            return self._prepend_saved(saved, self._payment_summary(draft))
-        return self._prepend_saved(saved, self._payment_amount_prompt(draft, missing))
+        return self._prepend_saved(saved, self._confirmation_summary(draft))
 
     def _outcome_reply(self, draft, saved, invalid):
         sections = []
@@ -661,10 +596,6 @@ class EnrollmentService:
         missing = self.missing_fields(draft, self.catalogue)
         invalid_fields = {field for field, _ in invalid}
         still_required = [field for field in missing if field not in invalid_fields]
-        if "payment_allocation" in invalid_fields:
-            still_required = [
-                field for field in still_required if field not in PAYMENT_FIELDS
-            ]
         if still_required:
             missing_items = "\n".join(
                 f"- {self.catalogue.enrollment_field_label(field)}"
@@ -680,21 +611,17 @@ class EnrollmentService:
 
         if len(invalid) == 1 and invalid[0][0] == "nric":
             closing = self.catalogue.enrollment_reply("correct_nric_only")
-        elif "payment_allocation" in invalid_fields:
-            closing = self.catalogue.enrollment_reply("correct_payment_allocation")
         elif invalid and "preferred_intake_date" in still_required:
             closing = self.catalogue.enrollment_reply("correct_and_choose_intake")
         elif invalid:
             closing = self.catalogue.enrollment_reply("correct_fields")
-        elif still_required == ["payment_method"]:
-            closing = self._payment_summary(draft)
         elif still_required and all(field in IDENTITY_FIELDS for field in still_required):
             closing = self.catalogue.enrollment_reply(
                 "continue_participant_details",
                 missing_template=self._participant_template(still_required),
             )
         elif still_required:
-            closing = self._payment_amount_prompt(draft, still_required)
+            closing = self.next_step_prompt(draft)
         else:
             closing = self._confirmation_summary(draft)
             draft.status = "awaiting_confirmation"
@@ -709,48 +636,7 @@ class EnrollmentService:
             demo_footer="",
         )
 
-    def _payment_summary(self, draft):
-        return self.catalogue.enrollment_reply(
-            "payment_selection",
-            course_name=draft.course,
-            course_fee=self._course_fee_display(draft),
-            skillsfuture=self.catalogue.skillsfuture_display_for(draft.course),
-            amount_due=self._course_fee_display(draft),
-            payment_question=self.catalogue.payment_question_for(draft.course),
-        )
-
-    def _payment_amount_prompt(self, draft, missing):
-        if draft.payment_method == "paynow":
-            return self.catalogue.enrollment_reply(
-                "paynow_amount", course_fee=self._course_fee_display(draft)
-            )
-        if draft.payment_method == "utap":
-            return self.catalogue.enrollment_reply(
-                "utap_upfront_amount", course_fee=self._course_fee_display(draft)
-            )
-        if missing == ["skillsfuture_amount"]:
-            return self.catalogue.enrollment_reply(
-                "skillsfuture_amount", course_fee=self._course_fee_display(draft)
-            )
-        return self.catalogue.enrollment_reply(
-            "paynow_remainder",
-            remaining=_display_amount(self._remaining_amount(draft)),
-            course_fee=self._course_fee_display(draft),
-        )
-
     def _confirmation_summary(self, draft):
-        total = Decimal(draft.skillsfuture_amount or 0) + Decimal(
-            draft.paynow_amount or 0
-        )
-        payment_lines = []
-        if Decimal(draft.skillsfuture_amount or 0) > 0:
-            payment_lines.append(
-                f"- SkillsFuture amount: {_display_amount(draft.skillsfuture_amount)}"
-            )
-        if Decimal(draft.paynow_amount or 0) > 0:
-            payment_lines.append(
-                f"- PayNow amount: {_display_amount(draft.paynow_amount)}"
-            )
         course = self.catalogue.course_for(draft.course_id or draft.course) or self.catalogue.course
         code = course.get("code")
         return self.catalogue.enrollment_reply(
@@ -768,10 +654,6 @@ class EnrollmentService:
             date_of_birth=_display_date(draft.date_of_birth),
             masked_email=_mask_email(draft.email),
             masked_mobile=_mask_mobile(draft.mobile_number),
-            payment_method=_payment_method_label(draft.payment_method),
-            payment_lines="\n".join(payment_lines),
-            payment_total=_display_amount(total),
-            remaining=_display_amount(max(Decimal("0"), self._fee(draft) - total)),
         )
 
     def _confirmed_reply(self, draft):
@@ -781,7 +663,7 @@ class EnrollmentService:
                 f"Thank you, {name}! Your enrolment details have been recorded successfully ✅\n\n"
                 f"🧾 Enrollment reference\nReference: {self._friendly_reference(draft)}\n\n"
                 "Our team will contact you once the upcoming intake date and exact "
-                "training venue are confirmed. Payment remains subject to staff verification."
+                "training venue are confirmed."
                 + self._confirmed_next_actions()
             )
         intake = self._intake_display(draft)
@@ -794,7 +676,7 @@ class EnrollmentService:
             f"📅 Intake\n{intake}\n\n"
             f"🧾 Enrollment reference\nReference: {self._friendly_reference(draft)}\n\n"
             "Your invoice is being prepared and will be emailed to your registered "
-            "email address. You can also download it from Enrollment & payment."
+            "email address. You can also download it from Enrollment & invoice."
         )
         return reply + self._confirmed_next_actions()
 
@@ -808,138 +690,6 @@ class EnrollmentService:
             "already_confirmed", first_name=_first_name(draft.full_name)
         )
 
-    def _validate_payment_update(self, draft, supplied):
-        """Validate dependent payment fields as one candidate allocation."""
-        if not supplied:
-            return {}, {}, []
-
-        previous = {
-            field: getattr(draft, field) for field in PAYMENT_FIELDS
-        }
-        previous_is_valid = self._payment_group_is_valid(previous, draft.course)
-        normalized = {}
-        errors = []
-        for field, value in supplied.items():
-            result, error = validate_field(
-                field,
-                value,
-                self.catalogue,
-                course_value=draft.course,
-                **self.validation_options,
-            )
-            if error:
-                errors.append((field, error))
-            else:
-                normalized[field] = result
-        if errors:
-            clear = {} if previous_is_valid else {
-                field: None for field in PAYMENT_FIELDS
-            }
-            return clear, {}, errors
-
-        candidate = dict(previous)
-        new_method = normalized.get("payment_method")
-        if new_method is not None and new_method != previous["payment_method"]:
-            candidate["skillsfuture_amount"] = None
-            candidate["paynow_amount"] = None
-        candidate.update(normalized)
-
-        if candidate["payment_method"] in {"paynow", "utap"}:
-            candidate["skillsfuture_amount"] = Decimal("0.00")
-        elif candidate["payment_method"] == "skillsfuture_paynow":
-            if candidate["skillsfuture_amount"] == self._fee(draft):
-                candidate["paynow_amount"] = Decimal("0.00")
-            elif (
-                "skillsfuture_amount" in normalized
-                and "paynow_amount" not in normalized
-                and not previous_is_valid
-            ):
-                candidate["paynow_amount"] = None
-
-        payment_error = self._payment_values_error(candidate, draft.course)
-        if self._payment_group_complete(candidate) and payment_error:
-            clear = {} if previous_is_valid else {
-                field: None for field in PAYMENT_FIELDS
-            }
-            return clear, {}, [("payment_allocation", payment_error)]
-
-        updates = {
-            field: candidate[field]
-            for field in PAYMENT_FIELDS
-            if candidate[field] != previous[field]
-        }
-        saved = {
-            field: candidate[field]
-            for field in normalized
-        }
-        return updates, saved, []
-
-    def _payment_group_complete(self, values):
-        method = values.get("payment_method")
-        if method in {"paynow", "utap"}:
-            return values.get("paynow_amount") is not None
-        if method == "skillsfuture_paynow":
-            return (
-                values.get("skillsfuture_amount") is not None
-                and values.get("paynow_amount") is not None
-            )
-        return False
-
-    def _payment_group_is_valid(self, values, course=None):
-        return self._payment_group_complete(values) and not self._payment_values_error(values, course)
-
-    def _payment_values_error(self, values, course=None):
-        fee = self._fee_from_values(course)
-        method = values.get("payment_method")
-        skillsfuture = values.get("skillsfuture_amount")
-        paynow = values.get("paynow_amount")
-        if not fee or method is None:
-            return None
-        if method == "paynow" and paynow is not None:
-            if skillsfuture != 0 or paynow != fee:
-                return self._allocation_difference(
-                    fee, Decimal(skillsfuture or 0) + paynow
-                )
-        elif method == "skillsfuture_paynow":
-            if skillsfuture is not None and skillsfuture <= 0:
-                return (
-                    "Enter the basic-tier SkillsFuture amount you intend to use, "
-                    "or choose PayNow if you will not use SkillsFuture Credits."
-                )
-            if skillsfuture is not None and paynow is not None:
-                total = skillsfuture + paynow
-                if total != fee:
-                    return self._allocation_difference(fee, total)
-        elif method == "utap" and paynow is not None:
-            if skillsfuture != 0:
-                return "SkillsFuture Credits and UTAP cannot be combined for this course."
-            if paynow != fee:
-                return self._allocation_difference(fee, paynow)
-        return None
-
-    def _fee_from_values(self, course=None):
-        return Decimal(self.catalogue.course_fee_for(course) or 0)
-
-    def _payment_error(self, draft):
-        return self._payment_values_error(
-            {field: getattr(draft, field) for field in PAYMENT_FIELDS},
-            draft.course,
-        )
-
-    @staticmethod
-    def _allocation_difference(fee, total):
-        if total < fee:
-            return (
-                f"The course fee is {_display_amount(fee)}, but the amounts entered "
-                f"total {_display_amount(total)}. There is "
-                f"{_display_amount(fee - total)} remaining. Please update the allocation."
-            )
-        return (
-            f"The course fee is {_display_amount(fee)}, but the amounts entered total "
-            f"{_display_amount(total)}, which is {_display_amount(total - fee)} too much. "
-            "Please update the allocation."
-        )
-
     def _save_course(self, draft, course_name):
         switching = draft.course is not None and draft.course != course_name
         course = self.catalogue.course_for(course_name)
@@ -948,9 +698,6 @@ class EnrollmentService:
         draft.course_fee = self.catalogue.course_fee_for(course_name)
         if switching:
             self._clear_intake(draft)
-            draft.payment_method = None
-            draft.skillsfuture_amount = None
-            draft.paynow_amount = None
 
     @staticmethod
     def _clear_intake(draft):
@@ -1036,7 +783,7 @@ class EnrollmentService:
         # also accepts that course, so the entered details are not discarded.
         has_details = any(
             field in supplied
-            for field in (*IDENTITY_FIELDS, *PAYMENT_FIELDS, "preferred_intake_date")
+            for field in (*IDENTITY_FIELDS, "preferred_intake_date")
         )
         return explicit or has_details or confirmation == "confirm"
 
@@ -1076,19 +823,6 @@ class EnrollmentService:
             and _looks_like_bare_field_value(expected, stripped)
         ):
             return {expected: stripped}
-        money = re.fullmatch(
-            r"(?:S\$|\$)?\s*(-?\d+(?:\.\d{1,2})?)", stripped, re.I
-        )
-        if not money or draft.payment_method is None:
-            return {}
-        value = money.group(1)
-        if draft.payment_method in {"paynow", "utap"} and draft.paynow_amount is None:
-            return {"paynow_amount": value}
-        if draft.payment_method == "skillsfuture_paynow":
-            if draft.skillsfuture_amount is None:
-                return {"skillsfuture_amount": value}
-            if draft.paynow_amount is None:
-                return {"paynow_amount": value}
         return {}
 
     def _newly_supplied_fields(self, draft, message, extracted_fields):
@@ -1102,13 +836,7 @@ class EnrollmentService:
             current_value = getattr(draft, field)
             if current_value is not None and EnrollmentService._values_equivalent(
                 field, current_value, value
-            ) and not (
-                field in pending_errors
-                or (
-                    field in PAYMENT_FIELDS
-                    and "payment_allocation" in pending_errors
-                )
-            ):
+            ) and field not in pending_errors:
                 continue
             if not self._message_supports_update(field, value, message):
                 continue
@@ -1130,11 +858,6 @@ class EnrollmentService:
 
     @staticmethod
     def _values_equivalent(field, current_value, extracted_value):
-        if field in {"skillsfuture_amount", "paynow_amount"}:
-            try:
-                return Decimal(current_value) == Decimal(str(extracted_value))
-            except (ArithmeticError, ValueError):
-                return False
         if field in {"nric", "mobile_number"}:
             current = re.sub(r"\W", "", str(current_value)).casefold()
             extracted = re.sub(r"\W", "", str(extracted_value)).casefold()
@@ -1154,9 +877,6 @@ class EnrollmentService:
             "email": ("email", "e-mail"),
             "preferred_intake_date": ("intake", "course date", "preferred date"),
             "mobile_number": ("mobile", "phone", "handphone", "hp", "contact number"),
-            "payment_method": ("payment", "paynow", "pay now", "skillsfuture", "utap"),
-            "skillsfuture_amount": ("skillsfuture", "sfc"),
-            "paynow_amount": ("paynow", "pay now"),
         }
         if field == "course":
             return self.catalogue.match_course(message) is not None or value_text in lowered or (
@@ -1216,9 +936,6 @@ class EnrollmentService:
             ),
             "intake_is_demo": draft.intake_is_demo,
             "mobile_number": _mask_mobile(draft.mobile_number) if draft.mobile_number else None,
-            "payment_method": draft.payment_method,
-            "skillsfuture_amount": _amount_value(draft.skillsfuture_amount),
-            "paynow_amount": _amount_value(draft.paynow_amount),
             "status": draft.status,
             "validation_status": draft.validation_status,
             "pending_corrections": list(draft.pending_corrections or []),
@@ -1238,11 +955,7 @@ class EnrollmentService:
             if not self.catalogue.has_intake_dates
             else ""
         )
-        values = {
-            "preferred_intake_date": intake,
-            "skillsfuture_amount": "if applicable",
-            "paynow_amount": "if applicable",
-        }
+        values = {"preferred_intake_date": intake}
         fields = (
             "full_name",
             "nric",
@@ -1250,9 +963,6 @@ class EnrollmentService:
             "email",
             "mobile_number",
             "preferred_intake_date",
-            "payment_method",
-            "skillsfuture_amount",
-            "paynow_amount",
         )
         return "\n".join(
             f"{index}. {self.catalogue.enrollment_field_label(field)}: "
@@ -1322,9 +1032,6 @@ class EnrollmentService:
             field == "preferred_intake_date" for field, _ in errors
         ):
             errors.append(("preferred_intake_date", intake_error))
-        payment_error = self._payment_error(draft)
-        if payment_error and not any(field == "payment_allocation" for field, _ in errors):
-            errors.append(("payment_allocation", payment_error))
         return errors
 
     def _duplicate_enrollment_error(self, draft):
@@ -1372,10 +1079,6 @@ class EnrollmentService:
         errors = dict(draft.validation_errors or {})
         for field in saved:
             errors.pop(field, None)
-        if any(field in PAYMENT_FIELDS for field in saved):
-            errors.pop("payment_allocation", None)
-            for field in PAYMENT_FIELDS:
-                errors.pop(field, None)
         for field, message in invalid:
             errors[field] = message
         draft.validation_errors = errors
@@ -1392,17 +1095,7 @@ class EnrollmentService:
             return intake["display_date"] if intake else _display_date(value)
         if field == "date_of_birth":
             return _display_date(value)
-        if field in {"skillsfuture_amount", "paynow_amount"}:
-            return _display_amount(value)
-        if field == "payment_method":
-            return _payment_method_label(value)
         return str(value)
-
-    def _remaining_amount(self, draft):
-        allocated = Decimal(draft.skillsfuture_amount or 0) + Decimal(
-            draft.paynow_amount or 0
-        )
-        return max(Decimal("0"), self._fee(draft) - allocated)
 
     def _fee(self, draft):
         approved = self.catalogue.course_fee_for(draft.course_id or draft.course)
@@ -1516,14 +1209,6 @@ def _amount_value(value):
     return f"{Decimal(value):.2f}" if value is not None else None
 
 
-def _payment_method_label(value):
-    return {
-        "paynow": "PayNow",
-        "skillsfuture_paynow": "Basic-tier SkillsFuture Credits and PayNow",
-        "utap": "UTAP reimbursement after upfront payment",
-    }.get(value, value)
-
-
 def _is_awaiting_intake_confirmation(value):
     normalized = " ".join(str(value).casefold().split())
     return normalized in {
@@ -1595,6 +1280,22 @@ def _assistant_requested_field(last_assistant_message, field):
     return any(term in lowered for term in field_terms.get(field, ()))
 
 
+def _is_retired_payment_only(message):
+    """Ignore retired payment edits unless the same turn supplies an enrollment field."""
+    text = str(message or "").casefold()
+    has_payment = bool(
+        re.search(r"\b(?:pay|payment|paynow|skillsfuture|utap|credit|allocation)\b", text)
+    )
+    has_enrollment_field = bool(
+        re.search(
+            r"\b(?:full\s+name|nric|fin|date\s+of\s+birth|dob|email|e-mail|"
+            r"mobile|phone|handphone|intake|course\s+date)\b",
+            text,
+        )
+    )
+    return has_payment and not has_enrollment_field
+
+
 def _looks_like_bare_field_value(field, value):
     """Accept only unambiguous short values for the currently requested field."""
     normalized = " ".join(str(value or "").strip().split())
@@ -1619,6 +1320,11 @@ def _looks_like_bare_field_value(field, value):
     }:
         return False
     if field == "full_name":
+        if re.search(
+            r"(?i)\b(?:pay|payment|paynow|skillsfuture|utap|credit|amount|invoice)\b",
+            normalized,
+        ):
+            return False
         return bool(
             re.fullmatch(r"[A-Za-z][A-Za-z' -]{1,79}", normalized)
             and 2 <= len(normalized.split()) <= 6

@@ -312,59 +312,6 @@ class FakeAIService:
             elif bare_mobile:
                 fields["mobile_number"] = bare_mobile.group(1)
 
-        payment_terms = []
-        if "mid-career" in lowered or "mid career" in lowered:
-            payment_terms.append("Mid-Career SkillsFuture")
-        elif "skillsfuture" in lowered or "sfc" in lowered:
-            payment_terms.append("SkillsFuture")
-        if "utap" in lowered or "union" in lowered:
-            payment_terms.append("UTAP")
-        if "paynow" in lowered or "pay now" in lowered:
-            payment_terms.append("PayNow")
-        if any(term in lowered for term in ("cash", "credit card", "cheque")):
-            payment_terms.append(message.strip())
-        if payment_terms:
-            fields["payment_method"] = " and ".join(payment_terms)
-
-        skillsfuture_match = re.search(
-            r"(?:skillsfuture|sfc)(?:\s+(?:credit|credits|amount))?\s*(?:is|:)?\s*(?:s\$|\$)?\s*(\d+(?:\.\d{1,2})?)",
-            message,
-            re.IGNORECASE,
-        )
-        if not skillsfuture_match:
-            skillsfuture_match = re.search(
-                r"(?:s\$|\$)?\s*(\d+(?:\.\d{1,2})?)\s*"
-                r"(?:of\s+)?(?:skillsfuture|sfc)",
-                message,
-                re.IGNORECASE,
-            )
-        if skillsfuture_match:
-            fields["skillsfuture_amount"] = skillsfuture_match.group(1)
-
-        paynow_match = re.search(
-            r"(?:paynow|pay now)(?:\s+amount)?\s*(?:is|:)?\s*(?:s\$|\$)?\s*(\d+(?:\.\d{1,2})?)",
-            message,
-            re.IGNORECASE,
-        )
-        if not paynow_match:
-            paynow_match = re.search(
-                r"(?:remaining\s+)?(?:s\$|\$)?\s*(\d+(?:\.\d{1,2})?)\s*"
-                r"(?:by|via|through)?\s*(?:paynow|pay now)",
-                message,
-                re.IGNORECASE,
-            )
-        if paynow_match:
-            fields["paynow_amount"] = paynow_match.group(1)
-
-        standalone_amount = re.fullmatch(
-            r"(?:s\$|\$)?\s*(\d+(?:\.\d{1,2})?)", message.strip(), re.IGNORECASE
-        )
-        if standalone_amount and draft_state.get("payment_method") == "skillsfuture_paynow":
-            if draft_state.get("skillsfuture_amount") is None:
-                fields["skillsfuture_amount"] = standalone_amount.group(1)
-            elif draft_state.get("paynow_amount") is None:
-                fields["paynow_amount"] = standalone_amount.group(1)
-
         if "2-day basic certificate" in lowered:
             fields["course"] = "2-Day Basic Certificate in Dental Assisting"
 

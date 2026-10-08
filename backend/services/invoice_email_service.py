@@ -534,7 +534,7 @@ class InvoiceEmailService:
             f"Invoice number: {invoice_number}\n"
             f"Course: {course}\n"
             f"Course intake: {intake}\n"
-            f"Course fee: {course_fee}\n"
+            f"Total amount due: {course_fee}\n"
             f"{warning}\n"
             "You may also sign in to your Q&M Training account to download your invoice.\n\n"
             "If you have any questions or require assistance, please reply to this email.\n\n"
@@ -565,7 +565,7 @@ class InvoiceEmailService:
 <tr><td style="padding:6px 0;"><strong>Invoice number</strong></td><td>{safe['invoice_number']}</td></tr>
 <tr><td style="padding:6px 0;"><strong>Course</strong></td><td>{safe['course']}</td></tr>
 <tr><td style="padding:6px 0;"><strong>Course intake</strong></td><td>{safe['intake']}</td></tr>
-<tr><td style="padding:6px 0;"><strong>Course fee</strong></td><td>{safe['course_fee']}</td></tr>
+<tr><td style="padding:6px 0;"><strong>Total amount due</strong></td><td>{safe['course_fee']}</td></tr>
 </table>
 {warning_html}
 <p>You may also sign in to your Q&amp;M Training account to download your invoice.</p>

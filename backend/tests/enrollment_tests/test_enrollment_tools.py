@@ -65,13 +65,12 @@ def test_tools_have_typed_inputs_outputs_and_safe_scoped_results(
                 "nric": "S1234567D",
                 "email": "test.student@example.com",
                 "mobile_number": "91234567",
-                "payment_method": "SkillsFuture and PayNow",
-                "skillsfuture_amount": "400",
-                "paynow_amount": "200",
             }
         )
-        assert validation_result.payment_valid is True
         assert validation_result.safe_normalized_values["nric"] == "S*******D"
+        assert "payment_method" not in validation_result.safe_normalized_values
+        assert "skillsfuture_amount" not in validation_result.safe_normalized_values
+        assert "paynow_amount" not in validation_result.safe_normalized_values
         rendered = " ".join(
             (
                 memory_result.model_dump_json(),

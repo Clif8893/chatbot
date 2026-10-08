@@ -82,9 +82,6 @@ class EnrollmentDraftTool(BaseTool):
             "email",
             "mobile_number",
             "preferred_intake_date",
-            "payment_method",
-            "skillsfuture_amount",
-            "paynow_amount",
         )
         saved = [name for name in field_names if getattr(draft, name) is not None]
         safe_values = _safe_values(draft) if include_safe_values else {}
@@ -118,9 +115,6 @@ def _safe_values(draft):
             else None
         ),
         "selected_intake_id": draft.intake_id,
-        "payment_method": draft.payment_method,
-        "skillsfuture_amount": _amount(draft.skillsfuture_amount),
-        "paynow_amount": _amount(draft.paynow_amount),
     }
 
 

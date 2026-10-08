@@ -1,8 +1,6 @@
 """Enrollment collection, validation, correction, and confirmation tests."""
 
 import json
-from decimal import Decimal
-
 import pytest
 
 from backend.app import create_app
@@ -19,19 +17,14 @@ SYNTHETIC_EMAIL = "test.student@example.com"
 SYNTHETIC_MOBILE = "91234567"
 
 
-def complete_draft(client, conversation_id, payment_message="I will pay by PayNow"):
+def complete_draft(client, conversation_id):
     send(client, conversation_id, "I want to enroll")
     send(client, conversation_id, f"My name is {SYNTHETIC_NAME}")
     send(client, conversation_id, f"My NRIC is {SYNTHETIC_NRIC}")
     send(client, conversation_id, "My DOB is 1990-01-02")
     send(client, conversation_id, f"My email is {SYNTHETIC_EMAIL}")
     send(client, conversation_id, f"My mobile number is {SYNTHETIC_MOBILE}")
-    response = send(client, conversation_id, payment_message)
-    if "skillsfuture" not in payment_message.casefold() and not any(
-        character.isdigit() for character in payment_message
-    ):
-        response = send(client, conversation_id, "S$600")
-    return response
+    return send(client, conversation_id, f"My mobile number is {SYNTHETIC_MOBILE}")
 
 
 @pytest.fixture()
@@ -89,8 +82,8 @@ def test_multiple_fields_can_be_extracted_from_one_message(client, conversation_
     assert payload["enrollment"]["status"] == "awaiting_confirmation"
     assert payload["enrollment"]["missing_fields"] == []
     assert "S*******D" in payload["message"]["content"]
-    assert "PayNow amount: S$600" in payload["message"]["content"]
-    assert "Total allocated: S$600" in payload["message"]["content"]
+    assert "PayNow amount" not in payload["message"]["content"]
+    assert "Total allocated" not in payload["message"]["content"]
 
 
 def test_all_fields_are_extracted_from_copyable_structured_message(
@@ -128,14 +121,17 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
     reply = response["message"]["content"]
     assert "Course\n" in reply
     assert "Participant\n" in reply
-    assert "Payment\n" in reply
+    assert "Payment\n" not in reply
     assert "NRIC/FIN: S*******D" in reply
-    assert "SkillsFuture amount: S$400" in reply
-    assert "PayNow amount: S$200" in reply
+    assert "SkillsFuture amount" not in reply
+    assert "PayNow amount" not in reply
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.nric == SYNTHETIC_NRIC
         assert draft.preferred_intake_date is None
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_all_fields_are_extracted_from_one_natural_language_sentence(
@@ -159,8 +155,9 @@ def test_all_fields_are_extracted_from_one_natural_language_sentence(
         assert draft.date_of_birth.isoformat() == "2000-05-15"
         assert draft.email == SYNTHETIC_EMAIL
         assert draft.mobile_number == SYNTHETIC_MOBILE
-        assert draft.skillsfuture_amount == Decimal("400.00")
-        assert draft.paynow_amount == Decimal("200.00")
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_partial_details_are_saved_then_completed_without_repetition(
@@ -214,7 +211,7 @@ def test_no_dates_saves_enrollment_awaiting_course_date_confirmation(
         assert saved.confirmed_at is not None
 
 
-def test_all_nine_enrollment_fields_are_stored_and_confirmed(
+def test_all_required_enrollment_fields_are_stored_and_confirmed(
     tmp_path, fake_ai, dated_catalogue
 ):
     from backend.app import create_app
@@ -254,8 +251,8 @@ def test_all_nine_enrollment_fields_are_stored_and_confirmed(
             "is_demo": False,
         },
     }
-    assert "SkillsFuture amount: S$400" in response["message"]["content"]
-    assert "PayNow amount: S$200" in response["message"]["content"]
+    assert "SkillsFuture amount" not in response["message"]["content"]
+    assert "PayNow amount" not in response["message"]["content"]
 
     confirmed = send(client, conversation_id, "confirm").get_json()
     assert confirmed["enrollment"]["status"] == "confirmed"
@@ -268,14 +265,11 @@ def test_all_nine_enrollment_fields_are_stored_and_confirmed(
             draft.date_of_birth,
             draft.email,
             draft.mobile_number,
-            draft.payment_method,
-            draft.skillsfuture_amount,
-            draft.paynow_amount,
         )
         assert all(value is not None for value in values)
-        assert draft.payment_method == "skillsfuture_paynow"
-        assert draft.skillsfuture_amount == Decimal("400.00")
-        assert draft.paynow_amount == Decimal("200.00")
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_repeated_confirmation_does_not_create_duplicate(app, client, conversation_id):
@@ -313,61 +307,36 @@ def test_faq_interruption_preserves_and_resumes_enrollment(client, conversation_
     assert "date of birth" in resumed["message"]["content"].casefold()
 
 
-def test_paynow_payment_defaults_are_stored(app, client, conversation_id):
-    complete_draft(client, conversation_id)
-    with app.app_context():
-        draft = EnrollmentDraft.query.one()
-        assert draft.payment_method == "paynow"
-        assert draft.skillsfuture_amount == Decimal("0.00")
-        assert draft.paynow_amount == Decimal("600.00")
-
-
-def test_utap_requires_upfront_payment_without_skillsfuture(app, client, conversation_id):
-    complete_draft(client, conversation_id, "I will use UTAP")
-    with app.app_context():
-        draft = EnrollmentDraft.query.one()
-        assert draft.payment_method == "utap"
-        assert draft.skillsfuture_amount == Decimal("0.00")
-        assert draft.paynow_amount == Decimal("600.00")
-
-
-def test_skillsfuture_and_paynow_must_total_course_fee(client, conversation_id):
-    send(client, conversation_id, "I want to enroll")
-    response = send(
-        client, conversation_id, "SkillsFuture S$400 and PayNow S$100"
-    ).get_json()
-    assert "S$100 remaining" in response["message"]["content"]
-
-
-def test_invalid_payment_total_can_be_corrected_without_restarting(
-    app, client, conversation_id
+@pytest.mark.parametrize(
+    "payment_text",
+    (
+        "Payment method: PayNow; PayNow amount: S$600",
+        "I will use UTAP",
+        "SkillsFuture S$400 and PayNow S$200",
+    ),
+)
+def test_payment_details_are_ignored_and_never_stored(
+    app, client, conversation_id, payment_text
 ):
     send(client, conversation_id, "I want to enroll")
-    invalid = send(
+    response = send(
         client,
         conversation_id,
         f"Full name: {SYNTHETIC_NAME}; NRIC: {SYNTHETIC_NRIC}; "
         f"DOB: 15 May 2000; email: {SYNTHETIC_EMAIL}; "
-        f"mobile: {SYNTHETIC_MOBILE}; SkillsFuture S$500; PayNow S$300",
+        f"mobile: {SYNTHETIC_MOBILE}; {payment_text}",
     ).get_json()
-    reply = invalid["message"]["content"]
-    assert "Needs correction" in reply
-    assert "Payment allocation" in reply
-    assert "total S$800" in reply
-    assert "😊" not in reply
-
-    corrected = send(
-        client,
-        conversation_id,
-        "Correct the payment to SkillsFuture S$400 and PayNow S$200",
-    ).get_json()
-    assert corrected["enrollment"]["status"] == "awaiting_confirmation"
-    assert "SkillsFuture amount: S$400" in corrected["message"]["content"]
-    assert "PayNow amount: S$200" in corrected["message"]["content"]
+    assert response["enrollment"]["status"] == "awaiting_confirmation"
+    assert "Payment method" not in response["message"]["content"]
+    assert "Payment allocation" not in response["message"]["content"]
+    assert "PayNow amount" not in response["message"]["content"]
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.full_name == SYNTHETIC_NAME
         assert draft.nric == SYNTHETIC_NRIC
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_invalid_email_and_mobile_are_corrected_without_losing_valid_details(
@@ -401,7 +370,7 @@ def test_invalid_email_and_mobile_are_corrected_without_losing_valid_details(
         assert draft.mobile_number == SYNTHETIC_MOBILE
 
 
-def test_utap_and_skillsfuture_conflict_preserves_other_valid_fields(
+def test_retired_payment_wording_does_not_block_other_valid_fields(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll")
@@ -413,30 +382,30 @@ def test_utap_and_skillsfuture_conflict_preserves_other_valid_fields(
         f"mobile: {SYNTHETIC_MOBILE}; I want UTAP and SkillsFuture",
     ).get_json()
     reply = conflict["message"]["content"]
-    assert "SkillsFuture Credits and UTAP cannot be combined" in reply
-    assert "Payment method" in reply
+    assert conflict["enrollment"]["status"] == "awaiting_confirmation"
+    assert "SkillsFuture Credits and UTAP cannot be combined" not in reply
+    assert "Payment method" not in reply
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.full_name == SYNTHETIC_NAME
         assert draft.nric == SYNTHETIC_NRIC
         assert draft.email == SYNTHETIC_EMAIL
+        assert draft.payment_method is None
 
 
-def test_full_skillsfuture_defaults_paynow_to_zero(client, conversation_id):
+def test_payment_only_message_does_not_advance_enrollment(client, conversation_id):
     send(client, conversation_id, "I want to enroll")
     response = send(
         client,
         conversation_id,
-        f"Full name: {SYNTHETIC_NAME}; NRIC: {SYNTHETIC_NRIC}; "
-        f"DOB: 15 May 2000; email: {SYNTHETIC_EMAIL}; "
-        f"mobile: {SYNTHETIC_MOBILE}; SkillsFuture S$600",
+        "SkillsFuture S$600",
     ).get_json()
-    assert response["enrollment"]["status"] == "awaiting_confirmation"
-    assert "SkillsFuture amount: S$600" in response["message"]["content"]
-    assert "Total allocated: S$600" in response["message"]["content"]
+    assert response["enrollment"]["status"] == "collecting"
+    assert response["enrollment"]["missing_fields"] == ["course"]
+    assert "SkillsFuture amount" not in response["message"]["content"]
 
 
-def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
+def test_later_irrelevant_extraction_cannot_revalidate_or_replace_saved_identity(
     tmp_path,
 ):
     class EchoingDraftFieldsAI(FakeAIService):
@@ -448,7 +417,6 @@ def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
                 result.extracted_fields.date_of_birth = "[DATE REDACTED]"
                 result.extracted_fields.email = ""
                 result.extracted_fields.mobile_number = "80000000"
-                result.extracted_fields.payment_method = "PayNow"
             return result
 
     app = create_app(
@@ -470,13 +438,13 @@ def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
     ):
         send(client, conversation_id, message)
 
-    payment = send(
+    response = send(
         client,
         conversation_id,
         "I want to use $400 SkillsFuture and pay the remaining $200 by PayNow.",
     ).get_json()
 
-    assert payment["enrollment"] == {
+    assert response["enrollment"] == {
         "status": "awaiting_confirmation",
         "course_id": "dental-assisting-basic",
         "course_name": "2-Day Basic Certificate in Dental Assisting",
@@ -486,9 +454,9 @@ def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
         "demo_intakes_enabled": False,
         "selected_intake": None,
     }
-    assert "valid Singapore NRIC" not in payment["message"]["content"]
-    assert "S1234567D" not in payment["message"]["content"]
-    assert "S*******D" in payment["message"]["content"]
+    assert "valid Singapore NRIC" not in response["message"]["content"]
+    assert "S1234567D" not in response["message"]["content"]
+    assert "S*******D" in response["message"]["content"]
     with app.app_context():
         draft = EnrollmentDraft.query.filter_by(
             conversation_id=conversation_id
@@ -498,9 +466,9 @@ def test_later_payment_extraction_cannot_revalidate_or_replace_saved_identity(
         assert draft.date_of_birth.isoformat() == "2000-05-15"
         assert draft.email == SYNTHETIC_EMAIL
         assert draft.mobile_number == SYNTHETIC_MOBILE
-        assert draft.payment_method == "skillsfuture_paynow"
-        assert draft.skillsfuture_amount == Decimal("400.00")
-        assert draft.paynow_amount == Decimal("200.00")
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_extraction_cannot_fill_a_field_absent_from_the_current_message(tmp_path):
@@ -562,26 +530,17 @@ def test_enrollment_drafts_do_not_leak_between_conversations(app, client):
         assert second.nric is None
 
 
-def test_skillsfuture_and_utap_cannot_be_combined():
-    value, error = validate_field(
-        "payment_method", "SkillsFuture and UTAP", CourseCatalogue()
-    )
-    assert value is None
-    assert "cannot be combined" in error
-
-
-def test_mid_career_skillsfuture_cannot_be_used():
-    value, error = validate_field(
-        "payment_method", "Mid-Career SkillsFuture", CourseCatalogue()
-    )
-    assert value is None
-    assert "cannot be used" in error
-
-
-def test_unsupported_payment_method_requires_staff_confirmation():
-    value, error = validate_field("payment_method", "cash", CourseCatalogue())
-    assert value is None
-    assert "team will confirm" in error
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("payment_method", "PayNow"),
+        ("skillsfuture_amount", "400"),
+        ("paynow_amount", "200"),
+    ),
+)
+def test_retired_payment_fields_are_not_supported_by_enrollment_validator(field, value):
+    with pytest.raises(ValueError, match="Unsupported enrollment field"):
+        validate_field(field, value, CourseCatalogue())
 
 
 @pytest.mark.parametrize("value", ["12345678", "71234567", "+65 8123"])
@@ -616,7 +575,6 @@ def test_invalid_email_is_rejected(client, conversation_id):
     [
         (("My NRIC is 1234",), "valid Singapore NRIC"),
         (("My email is invalid-email",), "valid email"),
-        (("SkillsFuture S$400 and PayNow S$100",), "S$100 remaining"),
     ],
 )
 def test_sensitive_and_error_replies_do_not_contain_emojis(

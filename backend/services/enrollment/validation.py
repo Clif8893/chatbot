@@ -2,7 +2,6 @@
 
 import re
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from dateutil import parser as date_parser
@@ -31,9 +30,6 @@ FIELD_LABELS = {
     "email": "email address",
     "preferred_intake_date": "preferred intake date",
     "mobile_number": "mobile number",
-    "payment_method": "payment method",
-    "skillsfuture_amount": "SkillsFuture amount",
-    "paynow_amount": "PayNow amount",
 }
 
 
@@ -168,71 +164,6 @@ def validate_field(
             return None, (
                 "Please enter a valid 8-digit Singapore mobile number starting "
                 "with 8 or 9."
-            )
-        return normalized, None
-
-    if field == "payment_method":
-        supplied = " ".join(str(value).casefold().replace("-", " ").split())
-        uses_skillsfuture = "skillsfuture" in supplied or "sfc" in supplied
-        uses_utap = "utap" in supplied or "union" in supplied
-        uses_paynow = "paynow" in supplied or "pay now" in supplied
-
-        course = catalogue.course_for(course_value) if course_value else None
-        if course and course.get("id") == "dental-infection-control":
-            if uses_paynow and not uses_skillsfuture and not uses_utap:
-                return "paynow", None
-            return None, (
-                "This workshop is payable in full by PayNow. SkillsFuture Credits "
-                "and UTAP are not currently available for it."
-            )
-
-        if "mid career" in supplied or "midcareer" in supplied:
-            return None, (
-                "Mid-Career SkillsFuture Credits cannot be used for this course. "
-                "You may use basic-tier SkillsFuture Credits instead."
-            )
-        if any(term in supplied for term in ("cash", "credit card", "cheque")):
-            return None, (
-                "That payment option is not covered by the supplied course information. "
-                "Our team will confirm what is possible."
-            )
-        if uses_skillsfuture and uses_utap:
-            return None, (
-                "SkillsFuture Credits and UTAP cannot be combined for this course. "
-                "Please choose one of them."
-            )
-        if uses_utap:
-            return "utap", None
-        if uses_skillsfuture:
-            return "skillsfuture_paynow", None
-        if uses_paynow or supplied in {"internet transfer", "bank transfer"}:
-            return "paynow", None
-        return None, (
-            "Please choose PayNow, basic-tier SkillsFuture Credits with any "
-            "PayNow remainder, or UTAP reimbursement. If you need another option, "
-            "our team will confirm what is possible."
-        )
-
-    if field in {"skillsfuture_amount", "paynow_amount"}:
-        fee = catalogue.course_fee_for(course_value) if course_value else catalogue.course_fee
-        if fee is None:
-            return None, (
-                "The approved course fee is not available yet. Staff confirmation "
-                "is required before payment amounts can be collected."
-            )
-        try:
-            amount_text = re.sub(
-                r"(?i)\bsgd\b|s\$|\$|,", "", str(value)
-            ).strip()
-            if not re.fullmatch(r"-?\d+(?:\.\d{1,2})?", amount_text):
-                raise ValueError
-            normalized = Decimal(amount_text).quantize(Decimal("0.01"))
-        except (InvalidOperation, TypeError, ValueError):
-            return None, f"Please enter a valid {FIELD_LABELS[field]} in dollars."
-        if normalized < 0 or normalized > fee:
-            return None, (
-                f"The {FIELD_LABELS[field]} must be between S$0 and "
-                f"S${fee:.2f}."
             )
         return normalized, None
 

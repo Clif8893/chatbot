@@ -142,7 +142,8 @@ def test_paynow_information_uses_company_uen(client, conversation_id):
     reply = payload["message"]["content"]
     assert "PayNow is accepted" in reply
     assert "201841969G" in reply
-    assert "SkillsFuture amount" in reply
+    assert "Payment arrangements are handled after enrolment confirmation" in reply
+    assert "SkillsFuture amount" not in reply
 
 
 def test_utap_guidance_explains_reimbursement_rules(client, conversation_id):
@@ -252,10 +253,12 @@ def test_enrollment_process_question_routes_to_faq(client, conversation_id):
     payload = send(client, conversation_id, "How can I enroll?").get_json()
     assert payload["routing"]["intent"] == "faq"
     reply = payload["message"]["content"]
-    assert "1. Full name as shown on your NRIC" in reply
-    assert "2. NRIC or FIN number" in reply
-    assert "6. Preferred intake date" in reply
-    assert "9. PayNow amount" in reply
+    assert "1. Selected course" in reply
+    assert "2. Full name as shown on your NRIC" in reply
+    assert "3. NRIC or FIN number" in reply
+    assert "7. Preferred intake date" in reply
+    assert "Payment method" not in reply
+    assert "PayNow amount" not in reply
     assert "all the details in one message" in reply
     assert "summary" in reply
 
@@ -274,12 +277,12 @@ def test_payment_guidance_uses_only_approved_options(client, conversation_id):
     assert "3. UTAP reimbursement" in reply
 
 
-def test_payment_screenshot_guidance_prefers_email(client, conversation_id):
+def test_payment_screenshot_is_not_collected_by_enrollment_chat(client, conversation_id):
     reply = send(
         client, conversation_id, "Can I send my payment screenshot by WhatsApp?"
     ).get_json()["message"]["content"]
-    assert "email or WhatsApp" in reply
-    assert "Email is the preferred channel" in reply
+    assert "not collected by the enrolment chatbot" in reply
+    assert "email or WhatsApp" not in reply
 
 
 def test_unknown_faq_is_answered_honestly(client, conversation_id):

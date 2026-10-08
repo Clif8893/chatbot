@@ -77,7 +77,10 @@ def test_enrollment_starts_with_approved_course_and_price_before_personal_data(
     assert "Enrollment Started" in reply
     assert "Would you like to enrol in this course?" not in reply
     assert "NRIC/FIN:" in reply
-    assert "Payment method:" in reply
+    assert "Payment method:" not in reply
+    assert "PayNow" not in reply
+    assert "SkillsFuture" not in reply
+    assert "UTAP" not in reply
 
 
 @pytest.mark.parametrize(
@@ -111,9 +114,9 @@ def test_contextual_affirmative_after_course_description_starts_enrollment(
     assert "4. Email address:" in content
     assert "5. Mobile number:" in content
     assert "6. Preferred course intake/date: Awaiting staff confirmation" in content
-    assert "7. Payment method:" in content
-    assert "8. SkillsFuture amount: if applicable" in content
-    assert "9. PayNow amount: if applicable" in content
+    assert "Payment method:" not in content
+    assert "SkillsFuture amount" not in content
+    assert "PayNow amount" not in content
     assert "Would you like to learn more about the course" not in content
 
 
@@ -201,8 +204,9 @@ def test_joined_numbered_fields_extract_all_valid_participant_values(
         "3. Date of birth: 3rd September 2007 "
         "4. Email: test.student@example.com5. Mobile number: 91234567",
     ).get_json()
-    assert payload["enrollment"]["missing_fields"] == ["payment_method"]
-    assert "Payment summary" in payload["message"]["content"]
+    assert payload["enrollment"]["missing_fields"] == []
+    assert payload["enrollment"]["status"] == "awaiting_confirmation"
+    assert "Payment summary" not in payload["message"]["content"]
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.date_of_birth.isoformat() == "2007-09-03"
@@ -241,7 +245,7 @@ def test_missing_approved_price_is_not_fabricated(tmp_path):
     continued = send(client, conversation_id, "Yes, this course").get_json()[
         "message"
     ]["content"]
-    assert "Staff must confirm the fee before payment details" in continued
+    assert "Staff must confirm the fee before enrolment" in continued
     assert "S$600" not in offer + continued
 
 
@@ -272,7 +276,7 @@ def test_intake_selection_is_limited_to_approved_dates(tmp_path):
     assert valid["enrollment"]["missing_fields"][0] == "full_name"
 
 
-def _reach_payment_stage(client, conversation_id):
+def _complete_required_details(client, conversation_id):
     send(client, conversation_id, "I want to enroll")
     send(client, conversation_id, "Yes, this course")
     return send(
@@ -284,88 +288,58 @@ def _reach_payment_stage(client, conversation_id):
     ).get_json()
 
 
-def test_payment_questions_are_conditional_and_totals_are_explained(
-    client, conversation_id
+@pytest.mark.parametrize(
+    "message",
+    (
+        "PayNow only",
+        "PayNow amount: S$550",
+        "Use S$400 SkillsFuture and S$200 PayNow",
+        "I want UTAP",
+    ),
+)
+def test_payment_inputs_are_not_collected_or_validated(
+    app, client, conversation_id, message
 ):
-    identity = _reach_payment_stage(client, conversation_id)
-    assert "Course fee: S$600 nett" in identity["message"]["content"]
-
-    paynow = send(client, conversation_id, "PayNow only").get_json()
-    assert paynow["enrollment"]["missing_fields"] == ["paynow_amount"]
-    assert "enter the PayNow amount" in paynow["message"]["content"]
-    assert "SkillsFuture amount" not in paynow["message"]["content"]
-
-    under = send(client, conversation_id, "PayNow amount: S$550").get_json()
-    assert "S$50 remaining" in under["message"]["content"]
-    over = send(client, conversation_id, "PayNow amount: S$700").get_json()
-    assert "between S$0 and S$600.00" in over["message"]["content"]
-    correct = send(client, conversation_id, "PayNow amount: S$600").get_json()
-    assert correct["enrollment"]["status"] == "awaiting_confirmation"
+    identity = _complete_required_details(client, conversation_id)
+    assert identity["enrollment"]["status"] == "awaiting_confirmation"
+    response = send(client, conversation_id, message).get_json()
+    assert "Payment method" not in response["message"]["content"]
+    assert "Payment allocation" not in response["message"]["content"]
+    with app.app_context():
+        draft = EnrollmentDraft.query.one()
+        assert draft.payment_method is None
+        assert draft.skillsfuture_amount is None
+        assert draft.paynow_amount is None
 
 
 def test_contextual_yes_and_no_apply_to_confirmation_summary(
     client, conversation_id
 ):
-    _reach_payment_stage(client, conversation_id)
-    summary = send(client, conversation_id, "PayNow amount: S$600").get_json()
+    summary = _complete_required_details(client, conversation_id)
     assert summary["enrollment"]["status"] == "awaiting_confirmation"
 
     rejected = send(client, conversation_id, "no").get_json()
     assert rejected["enrollment"]["status"] == "collecting"
     assert "Which detail would you like to correct?" in rejected["message"]["content"]
 
-    send(client, conversation_id, "PayNow amount: S$600")
+    send(client, conversation_id, "Correct email: corrected@example.com")
     confirmed = send(client, conversation_id, "yes please").get_json()
     assert confirmed["enrollment"]["status"] == "awaiting_course_date"
     assert "Reference:" in confirmed["message"]["content"]
 
 
-@pytest.mark.parametrize(
-    ("amount", "expected"),
-    [
-        ("PayNow amount: -10", "between S$0 and S$600.00"),
-        ("PayNow amount: six hundred", "valid PayNow amount in dollars"),
-    ],
-)
-def test_negative_and_non_numeric_payment_amounts_are_rejected(
-    client, conversation_id, amount, expected
-):
-    _reach_payment_stage(client, conversation_id)
-    send(client, conversation_id, "PayNow only")
-    reply = send(client, conversation_id, amount).get_json()["message"]["content"]
-    assert expected in reply
-
-
-def test_skillsfuture_only_requests_its_amount_then_accepts_full_fee(
-    client, conversation_id
-):
-    _reach_payment_stage(client, conversation_id)
-    selected = send(client, conversation_id, "Basic-tier SkillsFuture Credits").get_json()
-    assert selected["enrollment"]["missing_fields"] == ["skillsfuture_amount"]
-    assert "SkillsFuture Credit amount" in selected["message"]["content"]
-    assert "PayNow amount" not in selected["message"]["content"]
-    summary = send(client, conversation_id, "S$600").get_json()
-    assert summary["enrollment"]["status"] == "awaiting_confirmation"
-    assert "SkillsFuture amount: S$600" in summary["message"]["content"]
-
-
-def test_combined_payment_and_confirmation_are_masked_idempotent_and_exported(
+def test_confirmation_is_masked_idempotent_and_exported_without_payment_fields(
     app, client, conversation_id
 ):
-    _reach_payment_stage(client, conversation_id)
-    summary = send(
-        client,
-        conversation_id,
-        "Use S$400 SkillsFuture and S$200 PayNow",
-    ).get_json()
+    summary = _complete_required_details(client, conversation_id)
     content = summary["message"]["content"]
     assert summary["enrollment"]["status"] == "awaiting_confirmation"
     assert "Course fee: S$600 nett" in content
     assert "S*******D" in content
     assert "t***@example.com" in content
     assert "****4567" in content
-    assert "Remaining amount: S$0" in content
-    assert "Awaiting staff verification" in content
+    assert "Remaining amount" not in content
+    assert "Payment status" not in content
     assert "S1234567D" not in content
 
     first = send(client, conversation_id, "Confirm").get_json()
@@ -384,9 +358,7 @@ def test_combined_payment_and_confirmation_are_masked_idempotent_and_exported(
 def test_single_field_correction_preserves_other_identity_values(
     app, client, conversation_id
 ):
-    _reach_payment_stage(client, conversation_id)
-    send(client, conversation_id, "PayNow only")
-    send(client, conversation_id, "S$600")
+    _complete_required_details(client, conversation_id)
     send(client, conversation_id, "Correct email: corrected@example.com")
     with app.app_context():
         draft = EnrollmentDraft.query.one()

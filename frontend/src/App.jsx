@@ -65,7 +65,7 @@ function ParticipantPortal() {
     <nav className="public-navigation" aria-label="Participant portal">
       <strong>Q&amp;M Academy</strong>
       <span>
-        <button type="button" className="text-button" onClick={() => setShowEnrollment((value) => !value)}>{showEnrollment ? "Return to chat" : "Enrollment & payment"}</button>
+        <button type="button" className="text-button" onClick={() => setShowEnrollment((value) => !value)}>{showEnrollment ? "Return to chat" : "Enrollment & invoice"}</button>
         {" · "}{auth.user.full_name}{" · "}<button type="button" className="text-button" onClick={logout}>Sign out</button>
       </span>
     </nav>

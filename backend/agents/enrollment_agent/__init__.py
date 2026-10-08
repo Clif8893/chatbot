@@ -8,7 +8,7 @@ def build_enrollment_agent(llm, tools=None):
         role="Enrollment Agent",
         goal=(
             "Extract only explicitly supplied course-date, identity, contact, "
-            "payment-preference, payment-amount, correction, and confirmation details "
+            "correction, and confirmation details "
             "from natural enrolment conversation without deciding validity or repeating "
             "previously saved values."
         ),

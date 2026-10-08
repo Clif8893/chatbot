@@ -35,7 +35,10 @@ from backend.services.conversation_repository import ConversationRepository
 from backend.services.course_catalogue import CourseCatalogue
 from backend.services.enrollment.current_enrollment_service import CurrentEnrollmentResolver
 from backend.services.crewai_service import CrewAIService
-from backend.services.database_migrations import apply_additive_migrations
+from backend.services.database_migrations import (
+    apply_additive_migrations,
+    backup_sqlite_before_schema_sync,
+)
 from backend.services.delivery_service import DeliveryService
 from backend.services.enrollment.enrollment_management_service import EnrollmentManagementService
 from backend.services.finance_service import FinanceService
@@ -199,6 +202,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
     )
 
     with app.app_context():
+        backup_sqlite_before_schema_sync()
         db.create_all()
         apply_additive_migrations()
         intake_service.seed_intakes(catalogue.approved_intakes)
@@ -317,6 +321,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
             return jsonify(service.respond(conversation, payload["message"].strip()))
         except AIConfigurationError:
             db.session.rollback()
+            _record_chat_failure(repository, conversation, "ai_configuration")
             return _error_response(
                 "AI_CONFIGURATION_ERROR",
                 "The assistant is temporarily unavailable. Please try again later.",
@@ -324,6 +329,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
             )
         except AIServiceError:
             db.session.rollback()
+            _record_chat_failure(repository, conversation, "ai_service")
             return _error_response(
                 "AI_SERVICE_ERROR",
                 "The assistant is temporarily unavailable. Please try again.",
@@ -331,6 +337,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
             )
         except SQLAlchemyError:
             db.session.rollback()
+            _record_chat_failure(repository, conversation, "database")
             return _error_response(
                 "DATABASE_ERROR",
                 "The conversation could not be saved. Please try again.",
@@ -710,6 +717,15 @@ def _validate_chat_request(incoming_request):
 
 def _error_response(code, message, status_code):
     return jsonify({"error": {"code": code, "message": message}}), status_code
+
+
+def _record_chat_failure(repository, conversation, category):
+    """Persist only a safe failure category for the already-saved user turn."""
+    try:
+        repository.mark_latest_user_error(conversation, category)
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
 
 
 def _iso_timestamp(value):

@@ -2,7 +2,7 @@
 
 import re
 
-from backend.services.privacy import mask_nrics_in_text
+from backend.services.privacy import redact_for_classification
 
 
 FIELD_LABEL_PATTERNS = {
@@ -12,9 +12,6 @@ FIELD_LABEL_PATTERNS = {
     "email": r"e-?mail(?:\s+address)?",
     "preferred_intake_date": r"preferred\s+(?:course\s+)?(?:intake|date)|course\s+date|intake",
     "mobile_number": r"mobile(?:\s+number)?|handphone(?:\s+number)?|phone(?:\s+number)?|hp",
-    "payment_method": r"payment\s+(?:method|mode|option)",
-    "skillsfuture_amount": r"(?:basic-tier\s+)?skillsfuture(?:\s+credit)?\s+amount|sfc\s+amount",
-    "paynow_amount": r"pay\s*now\s+amount",
 }
 
 _LABEL_ALTERNATION = "|".join(
@@ -71,33 +68,6 @@ def parse_enrollment_fields(message):
     if natural_name:
         fields.setdefault("full_name", natural_name.group(1).strip())
 
-    if "skillsfuture" in lowered or re.search(r"\bsfc\b", lowered):
-        skillsfuture = _amount_near_method(text, r"(?:skillsfuture|sfc)")
-        if skillsfuture is not None:
-            fields.setdefault("skillsfuture_amount", skillsfuture)
-    if "paynow" in lowered or "pay now" in lowered:
-        paynow = _amount_near_method(text, r"pay\s*now")
-        if paynow is not None:
-            fields.setdefault("paynow_amount", paynow)
-
-    uses_skillsfuture = "skillsfuture" in lowered or bool(
-        re.search(r"\bsfc\b", lowered)
-    )
-    uses_utap = "utap" in lowered
-    uses_paynow = "paynow" in lowered or "pay now" in lowered
-    if "mid-career" in lowered or "mid career" in lowered:
-        fields["payment_method"] = "Mid-Career SkillsFuture"
-    elif uses_skillsfuture and uses_utap:
-        fields["payment_method"] = "SkillsFuture and UTAP"
-    elif uses_skillsfuture and uses_paynow:
-        fields["payment_method"] = "SkillsFuture and PayNow"
-    elif uses_utap:
-        fields["payment_method"] = "UTAP"
-    elif uses_skillsfuture:
-        fields["payment_method"] = "SkillsFuture"
-    elif uses_paynow:
-        fields["payment_method"] = "PayNow"
-
     if "next available intake" in lowered or "awaiting confirmation" in lowered:
         fields["preferred_intake_date"] = "Awaiting confirmation"
 
@@ -110,7 +80,7 @@ def is_explicit_correction(message):
 
 def redact_identity_for_ai(message):
     """Keep identity values out of model extraction while retaining their label."""
-    return mask_nrics_in_text(message or "")
+    return redact_for_classification(message or "")
 
 
 def _labelled_fields(text):
@@ -126,18 +96,6 @@ def _labelled_fields(text):
         if value:
             fields[field] = value
     return fields
-
-
-def _amount_near_method(text, method_pattern):
-    patterns = (
-        rf"(?i)(?:S\$|\$)?\s*(\d+(?:\.\d{{1,2}})?)\s*(?:from|using|by|via)?\s*{method_pattern}",
-        rf"(?i){method_pattern}(?:\s+(?:credit|credits))?\s*(?:amount\s*)?(?:is|of|:)?\s*(?:S\$|\$)?\s*(\d+(?:\.\d{{1,2}})?)",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1)
-    return None
 
 
 def _normalise_text(message):
@@ -166,10 +124,6 @@ def _clean_value(field, value):
     if field == "mobile_number":
         match = _MOBILE_PATTERN.search(cleaned)
         return match.group(0) if match else re.split(r"[,;]", cleaned, maxsplit=1)[0]
-    if field in {"skillsfuture_amount", "paynow_amount"}:
-        cleaned = re.sub(r"(?i)\s*,?\s*if\s+applicable\s*$", "", cleaned)
-        match = re.search(r"(?:S\$|\$)?\s*(-?\d+(?:\.\d{1,2})?)", cleaned, re.I)
-        return match.group(1) if match else cleaned
     return cleaned
 
 
