@@ -28,6 +28,10 @@ from backend.services.delivery_service import (
     EmailRecipientError,
     SMTPDeliveryError,
 )
+from backend.services.enrollment.registration_group_service import (
+    display_range as display_course_range,
+    invoice_courses,
+)
 
 
 ELIGIBLE_ENROLLMENT_STATUSES = {
@@ -415,15 +419,29 @@ class InvoiceEmailService:
             enrollment.intake_start_date or enrollment.preferred_intake_date,
             enrollment.intake_end_date,
         )
-        plain, html_body = self._render(
-            first_name=(enrollment.full_name or "Participant").split()[0],
-            invoice_number=generation.invoice_number,
-            course=(
+        courses = invoice_courses(enrollment)
+        course_text = (
+            "\n".join(f"{row.position}. {row.course_name}" for row in courses)
+            if len(courses) > 1
+            else (
                 COURSE_EMAIL_NAME
                 if "dental assisting" in str(enrollment.course or "").casefold()
                 else enrollment.course or COURSE_EMAIL_NAME
-            ),
-            intake=intake,
+            )
+        )
+        intake_text = (
+            "\n".join(
+                f"{row.position}. {row.course_name}: {display_course_range(row)}"
+                for row in courses
+            )
+            if len(courses) > 1
+            else intake
+        )
+        plain, html_body = self._render(
+            first_name=(enrollment.full_name or "Participant").split()[0],
+            invoice_number=generation.invoice_number,
+            course=course_text,
+            intake=intake_text,
             development=False,
             course_fee=_course_fee_text(enrollment.course_fee),
         )

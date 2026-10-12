@@ -74,7 +74,7 @@ def test_unrelated_faq_and_enrollment_replies_have_no_attachment(
 def test_skillsfuture_faq_interruption_does_not_expose_unapproved_attachment(
     client, conversation_id
 ):
-    send(client, conversation_id, "I want to enroll")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "My name is Test Student")
     faq = send(
         client,

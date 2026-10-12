@@ -21,7 +21,7 @@ def test_natural_dental_assisting_request_starts_without_course_correction(
         assert draft.course == app.extensions["catalogue"].course_name
 
 
-def test_repeated_natural_enrollment_request_resumes_one_draft(
+def test_repeated_vague_enrollment_request_keeps_course_gate_without_draft(
     app, client, conversation_id
 ):
     first = send(client, conversation_id, "Sign me up.").get_json()
@@ -29,10 +29,12 @@ def test_repeated_natural_enrollment_request_resumes_one_draft(
         client, conversation_id, "I would like to join the course."
     ).get_json()
 
-    assert first["enrollment"]["status"] == "collecting"
-    assert second["enrollment"]["status"] == "collecting"
+    assert first["enrollment"]["status"] is None
+    assert second["enrollment"]["status"] is None
+    assert "Please choose a course" in first["message"]["content"]
+    assert "Please choose a course" in second["message"]["content"]
     with app.app_context():
-        assert EnrollmentDraft.query.count() == 1
+        assert EnrollmentDraft.query.count() == 0
 
 
 def test_model_explanatory_course_text_is_not_validated_as_a_field(
@@ -73,7 +75,7 @@ def test_parser_stops_name_before_email_and_phone_boundaries():
 def test_multi_field_sentence_saves_only_clean_name_and_email(
     app, client, conversation_id
 ):
-    send(client, conversation_id, "I want to enrol.")
+    send(client, conversation_id, "I want to enrol in Dental Assisting.")
     response = send(
         client,
         conversation_id,
@@ -90,7 +92,7 @@ def test_multi_field_sentence_saves_only_clean_name_and_email(
 def test_malformed_later_name_does_not_replace_saved_valid_name(
     app, client, conversation_id
 ):
-    send(client, conversation_id, "I want to enrol.")
+    send(client, conversation_id, "I want to enrol in Dental Assisting.")
     send(client, conversation_id, "Full name: Test Student")
     send(
         client,

@@ -20,6 +20,10 @@ from backend.models import EnrollmentDraft, utc_now
 from backend.models.finance import Invoice, MasterInvoiceAudit, MasterInvoiceExport
 from backend.models.operations import CourseDate
 from backend.services.enrollment.validation import validate_field
+from backend.services.enrollment.registration_group_service import (
+    display_range as display_course_range,
+    invoice_courses,
+)
 
 
 SHEET_NAME = "Master Invoice List"
@@ -296,11 +300,27 @@ class MasterInvoiceService:
                 errors.append(error)
 
         fee = Decimal(str(enrollment.course_fee or 0))
+        courses = invoice_courses(enrollment)
         selected_course = self.catalogue.course_for(enrollment.course_id or enrollment.course)
-        approved_fee = Decimal(str(self.catalogue.course_fee_for(selected_course) or 0))
+        approved_fee = (
+            sum(
+                (Decimal(str(self.catalogue.course_fee_for(row.course_id) or 0)) for row in courses),
+                Decimal("0"),
+            )
+            if courses
+            else Decimal(str(self.catalogue.course_fee_for(selected_course) or 0))
+        )
         if fee != approved_fee:
             errors.append("The persisted course fee does not match the selected course.")
-        if enrollment.intake_id:
+        for child in courses:
+            if not child.intake_id:
+                continue
+            intake = db.session.get(CourseDate, child.intake_id)
+            if intake is None:
+                errors.append("The selected intake record does not exist.")
+            elif intake.course_id != child.course_id:
+                errors.append("The selected intake does not belong to the selected course.")
+        if not courses and enrollment.intake_id:
             intake = db.session.get(CourseDate, enrollment.intake_id)
             if intake is None:
                 errors.append("The selected intake record does not exist.")
@@ -564,11 +584,24 @@ class MasterInvoiceService:
             if skillsfuture is not None or paynow is not None
             else None
         )
+        courses = invoice_courses(enrollment)
+        grouped_names = (
+            " | ".join(
+                f"{row.course_name} [{display_course_range(row)}]" for row in courses
+            )
+            if len(courses) > 1
+            else enrollment.course
+        )
+        grouped_codes = (
+            " | ".join(filter(None, (self._course_code_value(row.course_id) for row in courses)))
+            if len(courses) > 1
+            else self._course_code(enrollment)
+        )
         values = (
             number,
             self._safe_text(record.invoice_number),
-            self._safe_text(self._course_code(enrollment)),
-            self._safe_text(enrollment.course),
+            self._safe_text(grouped_codes),
+            self._safe_text(grouped_names),
             enrollment.intake_start_date or enrollment.preferred_intake_date,
             enrollment.intake_end_date or enrollment.preferred_intake_date,
             self._safe_text(enrollment.full_name),
@@ -592,7 +625,11 @@ class MasterInvoiceService:
             self._safe_text(enrollment.status.replace("_", " ").title()),
             "Exported successfully",
             enrollment.id,
-            self._safe_text(enrollment.intake_id),
+            self._safe_text(
+                " | ".join(row.intake_id or "" for row in courses)
+                if len(courses) > 1
+                else enrollment.intake_id
+            ),
             "Yes" if enrollment.intake_is_demo else (
                 "No" if enrollment.intake_id else None
             ),
@@ -605,6 +642,10 @@ class MasterInvoiceService:
         if self.catalogue is None:
             return None
         course = self.catalogue.course_for(enrollment.course_id or enrollment.course)
+        return course.get("code") if course else None
+
+    def _course_code_value(self, course_id):
+        course = self.catalogue.course_for(course_id) if self.catalogue else None
         return course.get("code") if course else None
 
     @staticmethod
@@ -717,6 +758,17 @@ class MasterInvoiceService:
             "previous_intake_id": enrollment.previous_intake_id,
             "refund_review_required": bool(enrollment.refund_review_required),
         }
+        grouped = invoice_courses(enrollment)
+        if len(grouped) > 1:
+            payload["courses"] = [
+                {
+                    "course_id": row.course_id,
+                    "intake_id": row.intake_id,
+                    "fee": str(row.course_fee),
+                    "status": row.status,
+                }
+                for row in invoice_courses(enrollment)
+            ]
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 

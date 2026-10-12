@@ -394,8 +394,7 @@ def test_confirmation_automatically_generates_after_master_invoice_assignment(
     app.extensions["invoice_template"].converter = converter
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "1")
     ready = send(
         client,

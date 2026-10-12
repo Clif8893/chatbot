@@ -5,7 +5,19 @@ from datetime import date
 from decimal import Decimal
 
 from backend.extensions import db
-from backend.models import Conversation, EnrollmentDraft, utc_now
+from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft, utc_now
+from backend.services.enrollment.registration_group_service import (
+    add_course,
+    clear_intake as clear_course_intake,
+    courses_overlap,
+    display_range as display_course_range,
+    next_course_without_intake,
+    ordered_courses,
+    remove_course,
+    save_intake as save_course_intake,
+    sync_registration,
+    total_fee,
+)
 from backend.services.enrollment.enrollment_parser import (
     is_explicit_correction,
     parse_enrollment_fields,
@@ -30,6 +42,8 @@ ENROLLMENT_FIELDS = (
 )
 FINAL_STATUSES = {"confirmed", "awaiting_course_date"}
 INTAKE_SELECTION_FOLLOWUP = "intake_selection"
+COURSE_SELECTION_FOLLOWUP = "course_selection"
+COURSE_OPTIONS_KEY = "course_options"
 
 
 class EnrollmentService:
@@ -50,8 +64,20 @@ class EnrollmentService:
         self.validation_options = dict(validation_options or {})
 
     def handle(self, conversation, message, context, last_assistant_message=None):
-        draft = self.repository.get_or_create_draft(conversation)
+        draft = conversation.enrollment_draft
+        if draft is not None and draft.status == "discarded":
+            draft = None
+        if draft is None or not ordered_courses(draft):
+            initial_selection = self._handle_initial_course_selection(
+                conversation, draft, message
+            )
+            if initial_selection is not None:
+                return initial_selection
+            draft = conversation.enrollment_draft
         self._hydrate_structured_intake(draft)
+        selection_reply = self._handle_course_selection(conversation, draft, message)
+        if selection_reply is not None:
+            return selection_reply, draft
         tools = build_enrollment_tools(
             self.repository,
             self.catalogue,
@@ -67,6 +93,9 @@ class EnrollmentService:
             tools=tools,
         )
         extracted_fields = extraction.extracted_fields.model_dump(exclude_none=True)
+        # Course ownership is deterministic. A model-produced course cannot
+        # create a selection without evidence from the current participant turn.
+        extracted_fields.pop("course", None)
         # Known forms and structured values are resolved deterministically. These
         # values take precedence over model interpretation and still pass through
         # the same validators below.
@@ -92,28 +121,7 @@ class EnrollmentService:
         invalid = []
         saved = {}
 
-        course_value = supplied_fields.pop("course", None)
-        course_is_selected = self._course_is_selected(
-            draft, message, extraction.confirmation, supplied_fields
-        )
-        if course_value is not None:
-            normalized, error = validate_field(
-                "course", course_value, self.catalogue, **self.validation_options
-            )
-            if error:
-                invalid.append(("course", error))
-            else:
-                self._save_course(draft, normalized)
-                saved["course"] = normalized
-        elif draft.course is None and any(
-            field in supplied_fields
-            for field in (*IDENTITY_FIELDS, "preferred_intake_date")
-        ):
-            self._save_course(draft, self.catalogue.course_name)
-            saved["course"] = draft.course
-        elif draft.course is None and "this course" in message.casefold():
-            self._save_course(draft, self.catalogue.course_name)
-            saved["course"] = draft.course
+        supplied_fields.pop("course", None)
 
         if draft.course is None:
             draft.status = "collecting"
@@ -205,9 +213,20 @@ class EnrollmentService:
                 return self._outcome_reply(
                     draft, {}, [("preferred_intake_date", intake_error)]
                 ), draft
-            if self.intake_service is not None and draft.intake_id:
+            courses = ordered_courses(draft)
+            if self._overlapping_course_pair(courses):
+                second = self._overlapping_course_pair(courses)[1]
+                clear_course_intake(second)
+                draft.status = "collecting"
+                return (
+                    "The selected course intakes overlap. Please choose a different "
+                    f"intake for {second.course_name}.\n\n"
+                    + self._intake_selection_reply(draft, second),
+                    draft,
+                )
+            if self.intake_service is not None and courses:
                 try:
-                    self.intake_service.allocate(draft)
+                    self.intake_service.allocate_registration(draft, courses)
                 except ValueError as error:
                     draft.status = "collecting"
                     self._set_validation_state(
@@ -222,6 +241,9 @@ class EnrollmentService:
                 else "awaiting_course_date"
             )
             draft.confirmed_at = utc_now()
+            for course in courses:
+                course.status = draft.status
+                course.confirmed_at = draft.confirmed_at
             self._ensure_friendly_reference(draft)
             self._set_validation_state(draft, "valid", [])
             return self._confirmed_reply(draft), draft
@@ -252,12 +274,17 @@ class EnrollmentService:
     def missing_fields(cls, draft, catalogue=None):
         if draft is None:
             return []
-        if draft.course is None:
+        courses = ordered_courses(draft)
+        if not courses and draft.course is None:
             return ["course"]
-        if draft.course_fee is None:
+        if (courses and any(row.course_fee is None for row in courses)) or (
+            not courses and draft.course_fee is None
+        ):
             return ["course_fee"]
         if catalogue is not None and catalogue.has_intake_dates:
-            if draft.preferred_intake_date is None:
+            if courses and any(row.intake_id is None for row in courses):
+                return ["preferred_intake_date"]
+            if not courses and draft.preferred_intake_date is None:
                 return ["preferred_intake_date"]
 
         identity_missing = [
@@ -287,6 +314,12 @@ class EnrollmentService:
         sections = [f"Hi {name} 👋" if name else "Hi 👋", "Here is your current enrollment progress:"]
 
         saved_items = []
+        for row in ordered_courses(draft):
+            saved_items.append(f"- Course {row.position}: {row.course_name}")
+            if row.intake_id:
+                saved_items.append(
+                    f"  Intake: {display_course_range(row)}"
+                )
         for field in IDENTITY_FIELDS:
             value = getattr(draft, field)
             if value is None:
@@ -300,7 +333,7 @@ class EnrollmentService:
             saved_items.append(
                 f"- {self.catalogue.enrollment_field_label(field)}: {display}"
             )
-        if draft.intake_id and draft.preferred_intake_date:
+        if not ordered_courses(draft) and draft.intake_id and draft.preferred_intake_date:
             saved_items.append(
                 f"- {self.catalogue.enrollment_field_label('preferred_intake_date')}: "
                 f"{self._intake_display(draft)}"
@@ -341,28 +374,113 @@ class EnrollmentService:
             return False
         return bool(self._bare_stage_value(draft, message, last_assistant_message))
 
+    def remember_course_choices(self, conversation):
+        """Persist the exact ordered course list displayed in this conversation."""
+        if conversation.pending_action is not None:
+            return False
+        option_ids = [course["id"] for course in self.catalogue.courses]
+        data = dict(conversation.pending_change_data or {})
+        data[COURSE_OPTIONS_KEY] = option_ids
+        conversation.pending_change_data = data
+        conversation.pending_followup = COURSE_SELECTION_FOLLOWUP
+        return bool(option_ids)
+
+    def is_waiting_for_course(self, conversation):
+        return bool(
+            conversation.pending_followup == COURSE_SELECTION_FOLLOWUP
+            and self._displayed_course_ids(conversation)
+        )
+
+    def handle_pending_course_selection(self, conversation, message):
+        """Resolve course replies only against this conversation's displayed list."""
+        if not self.is_waiting_for_course(conversation):
+            return None
+        if _looks_like_course_question(message):
+            return None
+        selected, duplicate, error, attempted = (
+            self.catalogue.resolve_displayed_course_selection(
+                message, self._displayed_course_ids(conversation)
+            )
+        )
+        if not attempted and not _is_continue_enrollment(message):
+            return None
+        if duplicate or not selected:
+            self.remember_course_choices(conversation)
+            return self._course_selection_reply(error), conversation.enrollment_draft
+        return self._save_initial_course_selection(conversation, selected)
+
+    def _handle_initial_course_selection(self, conversation, draft, message):
+        option_ids = self._displayed_course_ids(conversation) or [
+            course["id"] for course in self.catalogue.courses
+        ]
+        selected, duplicate, error, attempted = (
+            self.catalogue.resolve_displayed_course_selection(message, option_ids)
+        )
+        if duplicate or not selected:
+            self.remember_course_choices(conversation)
+            if draft is not None:
+                draft.status = "collecting"
+            return self._course_selection_reply(error if attempted else None), draft
+        return self._save_initial_course_selection(conversation, selected)
+
+    def _save_initial_course_selection(self, conversation, selected):
+        draft = self.repository.get_or_create_draft(conversation)
+        existing = {row.course_id for row in ordered_courses(draft)}
+        for course in selected:
+            if course["id"] not in existing:
+                add_course(draft, course, self.catalogue)
+                existing.add(course["id"])
+        draft.status = "collecting"
+        draft.confirmed_at = None
+        self._set_validation_state(draft, "incomplete", [])
+        self._clear_course_choices(conversation)
+        db.session.flush()
+        return self._course_selection_progress(draft), draft
+
+    @staticmethod
+    def _displayed_course_ids(conversation):
+        values = dict(conversation.pending_change_data or {}).get(COURSE_OPTIONS_KEY)
+        return list(values) if isinstance(values, list) else []
+
+    @staticmethod
+    def _clear_course_choices(conversation):
+        if conversation.pending_followup == COURSE_SELECTION_FOLLOWUP:
+            conversation.pending_followup = None
+        data = dict(conversation.pending_change_data or {})
+        data.pop(COURSE_OPTIONS_KEY, None)
+        conversation.pending_change_data = data or None
+
     def remember_intake_choices(self, conversation, draft):
         """Persist the exact numbered choices shown for this conversation."""
+        target = next_course_without_intake(draft) if draft is not None else None
         if (
             conversation.pending_action is not None
             or draft is None
             or draft.course is None
-            or draft.preferred_intake_date is not None
+            or target is None
             or not self.catalogue.has_intake_dates
         ):
             if conversation.pending_followup == INTAKE_SELECTION_FOLLOWUP:
                 conversation.pending_followup = None
+                conversation.pending_enrollment_id = None
                 conversation.pending_intake_options = None
             return False
         conversation.pending_followup = INTAKE_SELECTION_FOLLOWUP
+        conversation.pending_enrollment_id = target.id
         conversation.pending_intake_options = [
-            item["id"] for item in self.catalogue.selectable_intakes_for(draft.course)
+            item["id"]
+            for item in self.catalogue.selectable_intakes_for(target.course_id)
         ]
         return bool(conversation.pending_intake_options)
 
     def handle_pending_intake_selection(self, conversation, message):
         """Resolve a clear choice against only the stored displayed intake list."""
         draft = conversation.enrollment_draft
+        target = (
+            db.session.get(EnrollmentCourse, conversation.pending_enrollment_id)
+            if conversation.pending_enrollment_id
+            else next_course_without_intake(draft) if draft else None
+        )
         waiting = conversation.pending_followup == INTAKE_SELECTION_FOLLOWUP
         changing = bool(
             draft
@@ -370,6 +488,9 @@ class EnrollmentService:
             and not draft.confirmed_at
             and _looks_like_intake_change(message)
         )
+        if target is None and changing:
+            courses = ordered_courses(draft)
+            target = courses[0] if courses else None
         if (
             not (waiting or changing)
             or conversation.pending_action is not None
@@ -377,35 +498,61 @@ class EnrollmentService:
             or not _looks_like_pending_intake_selection(message)
         ):
             return None
-        if draft is None or draft.course is None:
+        if draft is None or target is None:
             conversation.pending_followup = None
+            conversation.pending_enrollment_id = None
             conversation.pending_intake_options = None
             return None
 
         option_ids = list(conversation.pending_intake_options)
-        selected, error = self._match_pending_intake(option_ids, message, draft.course)
+        selected, error = self._match_pending_intake(
+            option_ids, message, target.course_id
+        )
         if selected is None:
             self.remember_intake_choices(conversation, draft)
-            return f"{error}\n\n{self._intake_selection_reply(draft)}", draft
+            return f"{error}\n\n{self._intake_selection_reply(draft, target)}", draft
 
-        intake_error = self._intake_availability_error(selected, draft)
+        intake_error = self._intake_availability_error(selected, target)
         if intake_error:
             self.remember_intake_choices(conversation, draft)
-            return f"{intake_error}\n\n{self._intake_selection_reply(draft)}", draft
+            return f"{intake_error}\n\n{self._intake_selection_reply(draft, target)}", draft
 
-        self._save_intake(draft, selected)
+        save_course_intake(target, selected, self.catalogue)
+        overlap = self._overlapping_course_pair(ordered_courses(draft))
+        if overlap:
+            clear_course_intake(target)
+            self.remember_intake_choices(conversation, draft)
+            return (
+                "That intake overlaps with your other selected course. Please "
+                f"choose a different intake for {target.course_name}.\n\n"
+                f"{self._intake_selection_reply(draft, target)}",
+                draft,
+            )
         errors = dict(draft.validation_errors or {})
         errors.pop("preferred_intake_date", None)
         draft.validation_errors = errors
         draft.status = "collecting"
         draft.confirmed_at = None
         conversation.pending_followup = None
+        conversation.pending_enrollment_id = None
+        # Retain the exact displayed choices after selection so a later natural
+        # correction (for example, "change to option 3") remains deterministic.
         conversation.pending_intake_options = option_ids
         db.session.flush()
+        next_target = next_course_without_intake(draft)
+        if next_target is not None:
+            self.remember_intake_choices(conversation, draft)
+            return (
+                f"Saved {target.course_name} intake: {display_course_range(target)}.\n\n"
+                f"Now choose an intake for Course {next_target.position}: "
+                f"{next_target.course_name}.\n\n"
+                f"{self._intake_selection_reply(draft, next_target)}",
+                draft,
+            )
         return (
             self._progress_reply(
                 draft,
-                {"preferred_intake_date": draft.preferred_intake_date},
+                {"preferred_intake_date": target.intake_start_date},
                 self.missing_fields(draft, self.catalogue),
             ),
             draft,
@@ -470,11 +617,17 @@ class EnrollmentService:
 
     def all_missing_fields(self, draft):
         missing = []
-        if draft.course is None:
+        courses = ordered_courses(draft)
+        if not courses and draft.course is None:
             missing.append("course")
-        if draft.course_fee is None:
+        if (courses and any(row.course_fee is None for row in courses)) or (
+            not courses and draft.course_fee is None
+        ):
             missing.append("course_fee")
-        if self.catalogue.has_intake_dates and draft.preferred_intake_date is None:
+        if self.catalogue.has_intake_dates and (
+            (courses and any(row.intake_id is None for row in courses))
+            or (not courses and draft.preferred_intake_date is None)
+        ):
             missing.append("preferred_intake_date")
         missing.extend(
             field for field in IDENTITY_FIELDS if getattr(draft, field) is None
@@ -495,28 +648,202 @@ class EnrollmentService:
             return "Your enrollment draft has been saved and requires the corrections shown above."
         return "Your enrollment draft has been saved, but some information is still required."
 
-    def _course_selection_reply(self):
-        primary = self.catalogue.course
+    def _handle_course_selection(self, conversation, draft, message):
+        """Apply course choices deterministically before CrewAI extraction."""
+        text = " ".join(str(message or "").casefold().split())
+        rows = ordered_courses(draft)
+        if len(rows) > 1 and re.search(
+            r"\b(?:remove (?:the )?second course|only want one course|course 1 only)\b",
+            text,
+        ):
+            remove_course(draft, rows[1])
+            conversation.pending_enrollment_id = None
+            conversation.pending_intake_options = None
+            return "Removed the second course.\n\n" + self._course_selection_progress(draft)
+
+        replacement = re.search(
+            r"\b(?:change|replace|correct)\s+(?:the\s+)?(?:course\s*)?([12])\b",
+            text,
+        )
+        if replacement and rows:
+            position = int(replacement.group(1))
+            selected_replacements, duplicate = self.catalogue.match_course_selection(message)
+            replacement_course = next(
+                (
+                    item
+                    for item in reversed(selected_replacements)
+                    if item["id"] != rows[position - 1].course_id
+                ),
+                None,
+            ) if position <= len(rows) else None
+            if duplicate or replacement_course is None:
+                return (
+                    "You have already selected that course. Please choose a different "
+                    "course or continue with your current selection."
+                )
+            if any(
+                item.position != position and item.course_id == replacement_course["id"]
+                for item in rows
+            ):
+                return (
+                    "You have already selected that course. Please choose a different "
+                    "course or continue with your current selection."
+                )
+            target = rows[position - 1]
+            target.course_id = replacement_course["id"]
+            target.course_name = replacement_course["name"]
+            target.course_fee = self.catalogue.course_fee_for(replacement_course)
+            clear_course_intake(target)
+            sync_registration(draft)
+            conversation.pending_enrollment_id = None
+            conversation.pending_intake_options = None
+            return f"Updated Course {position}.\n\n" + self._course_selection_progress(draft)
+
+        if rows and re.search(
+            r"\b(?:this course only|course only|only one course|continue with (?:this|that) course)\b",
+            text,
+        ):
+            return self._course_selection_progress(draft)
+
+        add_other = bool(
+            rows
+            and re.search(
+                r"\b(?:add|include|also take|also enrol in|also enroll in)\b.*\bother\b",
+                text,
+            )
+        )
+        selected, duplicate = self.catalogue.match_course_selection(message)
+        if add_other:
+            selected = [
+                course
+                for course in self.catalogue.courses
+                if course["id"] not in {row.course_id for row in rows}
+            ][:1]
+            duplicate = False
+        if not selected and not duplicate:
+            return None
+        if duplicate:
+            return (
+                "You have already selected that course. Please choose a different "
+                "course or continue with your current selection.\n\n"
+                + self._course_selection_progress(draft)
+                if rows
+                else "You cannot select the same course twice. Please choose one or "
+                "two different courses.\n\n" + self._course_selection_reply()
+            )
+
+        existing_ids = {row.course_id for row in rows}
+        both_request = bool(re.search(r"\b(?:both|all)\b", text))
+        if rows and not both_request and not add_other and all(
+            course["id"] in existing_ids for course in selected
+        ):
+            return (
+                "You have already selected that course. Please choose a different "
+                "course or continue with your current selection.\n\n"
+                + self._course_selection_progress(draft)
+            )
+
+        conflicts = self._active_course_conflicts(conversation, draft, selected)
+        allowed = [course for course in selected if course["id"] not in conflicts]
+        for course in allowed:
+            if course["id"] not in existing_ids:
+                try:
+                    add_course(draft, course, self.catalogue)
+                    existing_ids.add(course["id"])
+                except ValueError:
+                    break
+        draft.status = "collecting"
+        draft.confirmed_at = None
+        sync_registration(draft)
+        db.session.flush()
+
+        prefix = ""
+        if conflicts:
+            names = ", ".join(
+                course["name"] for course in selected if course["id"] in conflicts
+            )
+            prefix = (
+                f"You already have an active or completed enrollment for {names}. "
+                "That course was not added. You may choose a different course.\n\n"
+            )
+        if not ordered_courses(draft):
+            return prefix + self._course_selection_reply()
+        return prefix + self._course_selection_progress(draft)
+
+    def _active_course_conflicts(self, conversation, draft, selected):
+        ids = [course["id"] for course in selected]
+        if not ids or not conversation.user_id:
+            return set()
+        active = (
+            db.session.query(EnrollmentCourse.course_id)
+            .join(EnrollmentDraft, EnrollmentDraft.id == EnrollmentCourse.enrollment_id)
+            .join(Conversation, Conversation.id == EnrollmentDraft.conversation_id)
+            .filter(
+                Conversation.user_id == conversation.user_id,
+                EnrollmentDraft.id != draft.id,
+                EnrollmentCourse.course_id.in_(ids),
+                EnrollmentCourse.status.in_(
+                    (
+                        "awaiting_confirmation",
+                        "confirmed",
+                        "enrolled",
+                        "invoice_sent",
+                        "awaiting_payment",
+                        "paid",
+                        "receipt_issued",
+                        "completed",
+                    )
+                ),
+            )
+            .all()
+        )
+        return {course_id for (course_id,) in active}
+
+    def _course_selection_progress(self, draft):
+        rows = ordered_courses(draft)
+        lines = ["📚 Selected Courses", ""]
+        for row in rows:
+            lines.append(
+                f"{row.position}. {row.course_name} — "
+                f"{self.catalogue.course_fee_display_for(row.course_id)}"
+            )
+        target = next_course_without_intake(draft)
+        if target is not None:
+            lines.extend(
+                [
+                    "",
+                    f"Choose an intake for Course {target.position}: {target.course_name}.",
+                    "",
+                    self._intake_selection_reply(draft, target),
+                ]
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _overlapping_course_pair(courses):
+        for index, left in enumerate(courses):
+            for right in courses[index + 1 :]:
+                if courses_overlap(left, right):
+                    return left, right
+        return None
+
+    def _course_selection_reply(self, reason=None):
+        prefix = f"{reason}\n\n" if reason else ""
         return (
-            "I’d be happy to help you enrol 😊\n\n"
-            "Please choose a course:\n\n"
+            prefix
+            + "I’d be happy to help you enrol 😊\n\n"
+            "📚 Please choose a course:\n\n"
             f"{self.catalogue.course_choices()}\n\n"
-            "Please reply with the course number or course name.\n\n"
-            "Enrollment Started\n\n"
-            f"For the {primary['name']}:\n"
-            f"- Course fee: {self.catalogue.course_fee_display_for(primary)}\n"
-            f"- Duration: {primary['duration'].capitalize()}\n"
-            "- Available intake: Awaiting staff confirmation\n\n"
-            "Once you choose, I’ll collect the required details, including:\n"
-            "Full name as shown on NRIC:\nNRIC/FIN:\nDate of birth:\nEmail address:\nMobile number:\n"
-            "Preferred intake/date:"
+            "Reply with the course number, course name, or both."
         )
 
     def _selected_course_intro(self, course_value):
-        course = self.catalogue.course_for(course_value) or self.catalogue.course
+        course = self.catalogue.course_for(course_value)
+        if course is None:
+            return ""
         code = course.get("code")
         lines = [
-            "📚 Enrollment Started",
+            "You selected:",
             "",
             f"- Course: {course['name']}",
         ]
@@ -544,7 +871,7 @@ class EnrollmentService:
         if any(field in IDENTITY_FIELDS for field in missing):
             missing_identity = [field for field in missing if field in IDENTITY_FIELDS]
             if set(saved).issubset({"course", "preferred_intake_date"}):
-                return self._prepend_saved(
+                reply = self._prepend_saved(
                     saved,
                     self.catalogue.enrollment_reply(
                         "participant_details",
@@ -556,6 +883,12 @@ class EnrollmentService:
                         missing_template=self._initial_enrollment_template(draft),
                     ),
                 )
+                if (
+                    "preferred_intake_date" in saved
+                    and next_course_without_intake(draft) is None
+                ):
+                    return "📚 Enrollment Started\n\n" + reply
+                return reply
             if saved:
                 return self._outcome_reply(draft, saved, [])
             return self.catalogue.enrollment_reply(
@@ -625,18 +958,63 @@ class EnrollmentService:
         else:
             closing = self._confirmation_summary(draft)
             draft.status = "awaiting_confirmation"
+            for course in ordered_courses(draft):
+                course.status = "awaiting_confirmation"
         return "\n\n".join([*sections, closing])
 
-    def _intake_selection_reply(self, draft=None):
+    def _intake_selection_reply(self, draft=None, course_row=None):
+        target = course_row or (next_course_without_intake(draft) if draft else None)
+        course_value = target.course_id if target is not None else draft.course if draft else None
+        if not self.catalogue.selectable_intakes_for(course_value):
+            return self.catalogue.no_intakes_message
         return self.catalogue.enrollment_reply(
             "intake_selection",
             demo_heading="",
             intake_description="an available intake",
-            intake_choices=self.catalogue.intake_choices(draft.course if draft else None),
+            intake_choices=self.catalogue.intake_choices(course_value),
             demo_footer="",
         )
 
     def _confirmation_summary(self, draft):
+        courses = ordered_courses(draft)
+        if len(courses) > 1:
+            sections = [
+                "Please review both course enrollments before final submission.",
+                "",
+                "Participant",
+                "",
+                f"- Full name: {draft.full_name}",
+                f"- NRIC/FIN: {mask_nric(draft.nric)}",
+                f"- Date of birth: {_display_date(draft.date_of_birth)}",
+                f"- Email: {_mask_email(draft.email)}",
+                f"- Mobile: {_mask_mobile(draft.mobile_number)}",
+            ]
+            for row in courses:
+                course = self.catalogue.course_for(row.course_id) or {}
+                sections.extend(
+                    [
+                        "",
+                        f"Course {row.position}",
+                        "",
+                        f"- Course name: {row.course_name}",
+                        f"- Course code: {course.get('code') or 'Awaiting staff confirmation'}",
+                        f"- Intake: {display_course_range(row)}",
+                        f"- Course fee: {self.catalogue.course_fee_display_for(row.course_id)}",
+                    ]
+                )
+            sections.extend(
+                [
+                    "",
+                    "Invoice total",
+                    "",
+                    f"- Total amount due: {_display_amount(total_fee(draft))} nett",
+                    "",
+                    "Reply “Confirm” to submit both enrollments, “Correct "
+                    "[field/course/intake]: [new value]” to make a change, or "
+                    "“Cancel” to stop.",
+                ]
+            )
+            return "\n".join(sections)
         course = self.catalogue.course_for(draft.course_id or draft.course) or self.catalogue.course
         code = course.get("code")
         return self.catalogue.enrollment_reply(
@@ -658,6 +1036,7 @@ class EnrollmentService:
 
     def _confirmed_reply(self, draft):
         name = _first_name(draft.full_name) or "there"
+        courses = ordered_courses(draft)
         if draft.status == "awaiting_course_date":
             return (
                 f"Thank you, {name}! Your enrolment details have been recorded successfully ✅\n\n"
@@ -666,6 +1045,30 @@ class EnrollmentService:
                 "training venue are confirmed."
                 + self._confirmed_next_actions()
             )
+        if len(courses) > 1:
+            lines = [
+                f"Thank you, {name}! Both course enrollments have been confirmed successfully ✅",
+                "",
+            ]
+            for row in courses:
+                lines.extend(
+                    [
+                        f"📚 Course {row.position}",
+                        row.course_name,
+                        f"📅 Intake: {display_course_range(row)}",
+                        "",
+                    ]
+                )
+            lines.extend(
+                [
+                    "🧾 Enrollment reference",
+                    f"Reference: {self._friendly_reference(draft)}",
+                    "",
+                    "One combined invoice is being prepared and will be emailed "
+                    "to your registered email address.",
+                ]
+            )
+            return "\n".join(lines) + self._confirmed_next_actions()
         intake = self._intake_display(draft)
         selected_intake = self.catalogue.intake_for_id(draft.intake_id) if draft.intake_id else None
         if selected_intake and selected_intake.get("intake_type"):
@@ -691,16 +1094,31 @@ class EnrollmentService:
         )
 
     def _save_course(self, draft, course_name):
-        switching = draft.course is not None and draft.course != course_name
         course = self.catalogue.course_for(course_name)
-        draft.course = course_name
-        draft.course_id = course.get("id") if course else None
-        draft.course_fee = self.catalogue.course_fee_for(course_name)
-        if switching:
-            self._clear_intake(draft)
+        if course is None:
+            return
+        rows = ordered_courses(draft)
+        if not rows:
+            add_course(draft, course, self.catalogue)
+            return
+        primary = rows[0]
+        if primary.course_id == course["id"]:
+            sync_registration(draft)
+            return
+        if len(rows) > 1 and any(row.course_id == course["id"] for row in rows[1:]):
+            return
+        primary.course_id = course["id"]
+        primary.course_name = course["name"]
+        primary.course_fee = self.catalogue.course_fee_for(course)
+        clear_course_intake(primary)
+        sync_registration(draft)
 
     @staticmethod
     def _clear_intake(draft):
+        rows = ordered_courses(draft)
+        if rows:
+            clear_course_intake(rows[0])
+            return
         draft.preferred_intake_date = None
         draft.intake_id = None
         draft.intake_start_date = None
@@ -708,21 +1126,18 @@ class EnrollmentService:
         draft.intake_is_demo = None
 
     def _save_intake(self, draft, intake):
-        selected_course = self.catalogue.course_for(intake.get("course_id"))
-        if selected_course is None:
-            raise ValueError("The selected intake is not linked to an available course.")
-        if draft.course_id and draft.course_id != selected_course["id"]:
-            raise ValueError("The selected intake does not belong to the selected course.")
-        draft.course_id = selected_course["id"]
-        draft.course = selected_course["name"]
-        draft.course_fee = self.catalogue.course_fee_for(selected_course)
-        draft.intake_id = intake["id"]
-        draft.intake_start_date = date.fromisoformat(intake["start_date"])
-        draft.intake_end_date = date.fromisoformat(intake["end_date"])
-        draft.intake_is_demo = bool(intake["is_demo"])
-        draft.preferred_intake_date = draft.intake_start_date
+        rows = ordered_courses(draft)
+        target = next_course_without_intake(draft) or (rows[0] if rows else None)
+        if target is None:
+            course = self.catalogue.course_for(intake.get("course_id"))
+            target, _ = add_course(draft, course, self.catalogue)
+        save_course_intake(target, intake, self.catalogue)
 
     def _hydrate_structured_intake(self, draft):
+        rows = ordered_courses(draft)
+        if rows:
+            sync_registration(draft)
+            return
         if draft.preferred_intake_date is None or draft.intake_start_date is not None:
             return
         intake = self.catalogue.intake_for_start_date(draft.preferred_intake_date)
@@ -730,6 +1145,22 @@ class EnrollmentService:
             self._save_intake(draft, intake)
 
     def _selected_intake_error(self, draft):
+        courses = ordered_courses(draft)
+        if courses:
+            for row in courses:
+                if row.intake_id is None:
+                    continue
+                if self.intake_service is not None:
+                    error = self.intake_service.allocation_error(row.intake_id, row)
+                    if error:
+                        return error
+                intake = self.catalogue.intake_for_id(row.intake_id)
+                if intake is None or intake.get("course_id") != row.course_id:
+                    return (
+                        "The selected intake does not belong to the selected course. "
+                        "Please choose another intake."
+                    )
+            return None
         if draft.preferred_intake_date is None:
             return None
         if self.intake_service is not None and draft.intake_id:
@@ -756,36 +1187,6 @@ class EnrollmentService:
                 draft.intake_start_date, draft.intake_end_date
             )
         return _display_date(draft.preferred_intake_date)
-
-    def _course_is_selected(self, draft, message, confirmation, supplied):
-        if draft.course is not None:
-            return True
-        lowered = " ".join(message.casefold().split())
-        explicit = any(
-            phrase in lowered
-            for phrase in (
-                "this course",
-                "select the course",
-                "choose the course",
-                "enrol me in",
-                "enroll me in",
-                "want to enrol",
-                "want to enroll",
-                "want to apply",
-                "sign me up",
-                "like to join",
-                "like to enrol",
-                "like to enroll",
-                self.catalogue.course_name.casefold(),
-            )
-        )
-        # Supplying participant details after the only approved course was shown
-        # also accepts that course, so the entered details are not discarded.
-        has_details = any(
-            field in supplied
-            for field in (*IDENTITY_FIELDS, "preferred_intake_date")
-        )
-        return explicit or has_details or confirmation == "confirm"
 
     def _bare_stage_value(self, draft, message, last_assistant_message=None):
         """Map a safe bare reply to the one field the current stage expects."""
@@ -911,6 +1312,7 @@ class EnrollmentService:
         return len(value_text) >= 2 and value_text in lowered
 
     def _draft_state(self, draft):
+        courses = ordered_courses(draft)
         return {
             "course": draft.course,
             "course_fee": _amount_value(draft.course_fee),
@@ -940,6 +1342,22 @@ class EnrollmentService:
             "validation_status": draft.validation_status,
             "pending_corrections": list(draft.pending_corrections or []),
             "validation_errors": dict(draft.validation_errors or {}),
+            "selected_courses": [
+                {
+                    "position": row.position,
+                    "course_id": row.course_id,
+                    "intake_selected": bool(row.intake_id),
+                    "status": row.status,
+                }
+                for row in courses
+            ],
+            "pending_stage": (
+                f"course_{next_course_without_intake(draft).position}_intake"
+                if next_course_without_intake(draft)
+                else "participant_details"
+                if self.missing_fields(draft, self.catalogue)
+                else "confirmation"
+            ),
         }
 
     def _participant_template(self, fields):
@@ -948,25 +1366,15 @@ class EnrollmentService:
         )
 
     def _initial_enrollment_template(self, draft):
-        intake = (
-            self._intake_display(draft)
-            if draft.preferred_intake_date
-            else "Awaiting staff confirmation"
-            if not self.catalogue.has_intake_dates
-            else ""
-        )
-        values = {"preferred_intake_date": intake}
-        fields = (
+        fields = [
             "full_name",
             "nric",
             "date_of_birth",
             "email",
             "mobile_number",
-            "preferred_intake_date",
-        )
+        ]
         return "\n".join(
-            f"{index}. {self.catalogue.enrollment_field_label(field)}: "
-            f"{values.get(field, '')}".rstrip()
+            f"{index}. {self.catalogue.enrollment_field_label(field)}:"
             for index, field in enumerate(fields, start=1)
         )
 
@@ -1035,16 +1443,36 @@ class EnrollmentService:
         return errors
 
     def _duplicate_enrollment_error(self, draft):
-        if not draft.nric or not draft.course or not draft.intake_id:
+        courses = ordered_courses(draft)
+        if not draft.nric or not courses:
             return None
         duplicate = (
-            db.session.query(EnrollmentDraft.id)
-            .join(Conversation, Conversation.id == EnrollmentDraft.conversation_id)
+            db.session.query(EnrollmentCourse.id)
+            .join(EnrollmentDraft, EnrollmentDraft.id == EnrollmentCourse.enrollment_id)
             .filter(
+                EnrollmentCourse.enrollment_id != draft.id,
+                EnrollmentDraft.nric == draft.nric,
+                EnrollmentCourse.course_id.in_([row.course_id for row in courses]),
+                EnrollmentCourse.status.in_(
+                    (
+                        "awaiting_confirmation",
+                        "confirmed",
+                        "enrolled",
+                        "invoice_sent",
+                        "awaiting_payment",
+                        "paid",
+                        "receipt_issued",
+                        "completed",
+                    )
+                ),
+            )
+            .first()
+        )
+        if duplicate is None:
+            duplicate = EnrollmentDraft.query.filter(
                 EnrollmentDraft.id != draft.id,
                 EnrollmentDraft.nric == draft.nric,
-                EnrollmentDraft.course == draft.course,
-                EnrollmentDraft.intake_id == draft.intake_id,
+                EnrollmentDraft.course_id.in_([row.course_id for row in courses]),
                 EnrollmentDraft.status.in_(
                     (
                         "awaiting_confirmation",
@@ -1054,17 +1482,16 @@ class EnrollmentService:
                         "awaiting_payment",
                         "paid",
                         "receipt_issued",
+                        "completed",
                     )
                 ),
-            )
-            .first()
-        )
+            ).first()
         if duplicate is None:
             return None
         return (
-            "It looks like an active enrolment already exists for this participant, "
-            "course and intake. I have not created another confirmed enrolment. "
-            "Please ask our staff to review the existing registration."
+            "It looks like an active enrolment already exists for this participant. "
+            "I have not created another enrollment. Please choose a different course "
+            "or ask staff to review the existing registration."
         )
 
     @staticmethod
@@ -1221,8 +1648,52 @@ def _is_awaiting_intake_confirmation(value):
     }
 
 
+def _is_continue_enrollment(message):
+    normalized = " ".join(str(message or "").casefold().split()).strip(" .!?")
+    return normalized in {
+        "continue enrollment",
+        "continue enrolment",
+        "continue my enrollment",
+        "continue my enrolment",
+        "resume enrollment",
+        "resume enrolment",
+    }
+
+
+def _looks_like_course_question(message):
+    normalized = " ".join(str(message or "").casefold().split())
+    if _is_continue_enrollment(normalized):
+        return False
+    if any(
+        phrase in normalized
+        for phrase in ("want to enrol", "want to enroll", "sign me up", "register me")
+    ):
+        return False
+    question_opening = re.match(
+        r"^(?:what|when|where|which|why|how|can|could|is|are|do|does|tell me)\b",
+        normalized,
+    )
+    fact_terms = (
+        "fee", "cost", "duration", "time", "date", "intake", "venue",
+        "location", "skillsfuture", "payment", "about",
+    )
+    return bool(
+        "?" in normalized
+        or (question_opening and any(term in normalized for term in fact_terms))
+    )
+
+
 def _looks_like_pending_intake_selection(message):
     normalized = " ".join(str(message or "").casefold().split())
+    if re.search(
+        r"\b(?:full name|name is|nric|fin|date of birth|dob|born|email|"
+        r"mobile|phone|contact number)\b",
+        normalized,
+    ):
+        # Participant details cannot be collected until the displayed intake
+        # choice has been resolved. Treat them as an invalid intake response so
+        # the deterministic stage gate re-prompts without saving any identity.
+        return True
     if re.fullmatch(r"(?:option\s*)?\d+", normalized):
         return True
     if re.search(

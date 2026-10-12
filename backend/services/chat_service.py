@@ -7,6 +7,10 @@ from datetime import timezone
 from backend.agents.schemas import IntentClassification
 from backend.extensions import db
 from backend.services.enrollment.enrollment_service import EnrollmentService
+from backend.services.enrollment.registration_group_service import (
+    display_range as display_course_range,
+    ordered_courses,
+)
 from backend.services.faq_attachments import FAQAttachmentCatalogue
 from backend.services.privacy import mask_nrics_in_text, redact_for_classification
 from backend.services.invoice_email_service import InvoiceEmailError, ResendCooldownError
@@ -145,6 +149,11 @@ class ChatService:
             "infection" in user_text.casefold()
             and "control" in user_text.casefold()
             and not is_course_change_request(user_text)
+            and not self.enrollment.is_waiting_for_course(conversation)
+            and not any(
+                term in user_text.casefold()
+                for term in ("enrol", "enroll", "register", "sign up", "join")
+            )
             and not (draft and conversation.active_intent == "enrollment")
         ):
             return self._direct_reply(
@@ -154,6 +163,21 @@ class ChatService:
                 self.catalogue.course_overview_reply("dental-infection-control"),
                 intent="faq",
                 agent_name="faq_agent",
+            )
+        pending_course = self.enrollment.handle_pending_course_selection(
+            conversation, user_text
+        )
+        if pending_course is not None:
+            reply, draft = pending_course
+            conversation.active_intent = "enrollment"
+            self.enrollment.remember_intake_choices(conversation, draft)
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="enrollment",
+                agent_name="enrollment_agent",
             )
         pending_intake = self.enrollment.handle_pending_intake_selection(
             conversation, user_text
@@ -335,6 +359,9 @@ class ChatService:
             }
 
         enrollment_message = user_text
+        course_choices, duplicate_course_choice = self.catalogue.match_course_selection(
+            user_text
+        )
         if contextual_decision:
             classification = IntentClassification(
                 intent="enrollment",
@@ -352,6 +379,19 @@ class ChatService:
                 else "Yes, enrol me in this course"
             )
             conversation.pending_followup = None
+        elif (course_choices or duplicate_course_choice) and (
+            draft is not None
+            or "available courses" in str(last_assistant_message or "").casefold()
+            or any(
+                term in user_text.casefold()
+                for term in ("enrol", "enroll", "register", "sign up")
+            )
+        ):
+            classification = IntentClassification(
+                intent="enrollment",
+                confidence=1.0,
+                short_reason="Deterministic canonical course selection.",
+            )
         elif self.enrollment.is_contextual_stage_reply(
             draft, user_text, last_assistant_message
         ):
@@ -422,6 +462,8 @@ class ChatService:
             if draft and draft.course:
                 if draft.status == "awaiting_confirmation":
                     conversation.pending_followup = ENROLLMENT_CONFIRMATION_FOLLOWUP
+            elif self.enrollment.is_waiting_for_course(conversation):
+                pass
             else:
                 conversation.pending_followup = (
                     ENROLLMENT_OFFER_FOLLOWUP
@@ -443,20 +485,16 @@ class ChatService:
             )
             if waiting_for_intake:
                 pass
-            elif draft.course is None:
-                conversation.pending_followup = (
-                    ENROLLMENT_OFFER_FOLLOWUP
-                    if len(self.catalogue.courses) == 1
-                    else None
-                )
+            elif draft is None or draft.course is None:
+                self.enrollment.remember_course_choices(conversation)
             elif draft.status == "awaiting_confirmation":
                 conversation.pending_followup = ENROLLMENT_CONFIRMATION_FOLLOWUP
             else:
                 conversation.pending_followup = None
             agent_name = "enrollment_agent"
             attachment = None
-            confirmed_now = bool(draft.confirmed_at) and not was_confirmed
-            if draft.confirmed_at:
+            confirmed_now = bool(draft and draft.confirmed_at) and not was_confirmed
+            if draft and draft.confirmed_at:
                 conversation.pending_intake_options = None
         else:
             reply = UNCLEAR_REPLY
@@ -660,11 +698,15 @@ def serialize_enrollment(draft, catalogue=None):
     if draft is None:
         return {
             "status": None,
+            "course_id": None,
+            "course_name": None,
+            "course_fee": None,
             "missing_fields": [],
             "demo_intakes_enabled": bool(
                 catalogue and catalogue.enable_demo_intakes
             ),
             "selected_intake": None,
+            "courses": [],
         }
     selected_intake = None
     if draft.intake_start_date:
@@ -680,7 +722,8 @@ def serialize_enrollment(draft, catalogue=None):
             ),
             "is_demo": bool(draft.intake_is_demo),
         }
-    return {
+    courses = ordered_courses(draft)
+    payload = {
         "status": draft.status,
         "course_id": draft.course_id,
         "course_name": draft.course,
@@ -692,6 +735,32 @@ def serialize_enrollment(draft, catalogue=None):
         ),
         "selected_intake": selected_intake,
     }
+    if len(courses) > 1:
+        payload["courses"] = [
+            {
+                "id": row.id,
+                "position": row.position,
+                "course_id": row.course_id,
+                "course_name": row.course_name,
+                "course_fee": str(row.course_fee),
+                "status": row.status,
+                "selected_intake": (
+                    {
+                        "id": row.intake_id,
+                        "start_date": row.intake_start_date.isoformat(),
+                        "end_date": (
+                            row.intake_end_date or row.intake_start_date
+                        ).isoformat(),
+                        "display_date": display_course_range(row),
+                        "is_demo": bool(row.intake_is_demo),
+                    }
+                    if row.intake_start_date
+                    else None
+                ),
+            }
+            for row in courses
+        ]
+    return payload
 
 
 def _display_intake_range(start, end):

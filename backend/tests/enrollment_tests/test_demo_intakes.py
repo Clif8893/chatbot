@@ -32,6 +32,9 @@ def demo_app(tmp_path, fake_ai, *, catalogue=None, enabled=True, name="demo.db")
             "OPENAI_API_KEY": "",
             "SQLALCHEMY_DATABASE_URI": f"sqlite:///{(tmp_path / name).as_posix()}",
             "ENABLE_DEMO_INTAKES": enabled,
+            # Keep the fixed 2026 demonstration catalogue deterministic. Runtime
+            # behaviour still rejects historical intakes against Singapore today.
+            "ENROLLMENT_CURRENT_DATE": date(2026, 10, 1),
         },
         ai_service=fake_ai,
         catalogue=catalogue,
@@ -40,8 +43,9 @@ def demo_app(tmp_path, fake_ai, *, catalogue=None, enabled=True, name="demo.db")
 
 def begin_intake_selection(client):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    reply = send(client, conversation_id, "Yes, this course").get_json()
+    reply = send(
+        client, conversation_id, "I want to enroll in Dental Assisting"
+    ).get_json()
     return conversation_id, reply
 
 
@@ -79,8 +83,12 @@ def test_demo_dates_are_opt_in_and_hidden_by_default(tmp_path, fake_ai):
     client = authenticated_client(app)
     created = client.post("/api/conversations").get_json()
     assert created["demo_intakes_enabled"] is False
-    offer = send(client, created["conversation_id"], "I want to enroll").get_json()
-    assert "Awaiting staff confirmation" in offer["message"]["content"]
+    offer = send(
+        client,
+        created["conversation_id"],
+        "I want to enroll in Dental Assisting",
+    ).get_json()
+    assert "dates are being updated" in offer["message"]["content"]
     assert "10–11 October 2026" not in offer["message"]["content"]
 
     env_example = (CATALOGUE_PATH.parents[1] / ".env.example").read_text(

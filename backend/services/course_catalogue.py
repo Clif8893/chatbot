@@ -71,6 +71,134 @@ class CourseCatalogue:
             return self.courses[int(supplied) - 1]
         return self.course_for(supplied)
 
+    def match_course_selection(self, value):
+        """Return canonical courses in mentioned order and flag duplicates."""
+        text = " ".join(str(value or "").casefold().split())
+        if not text:
+            return [], False
+        if re.search(r"\b(?:both|all)\s+(?:of\s+the\s+)?courses?\b", text) or text == "both":
+            return list(self.courses), False
+
+        mentions = []
+        # Bare numbers are course choices only when the whole message has the
+        # shape of a selection. This prevents numbered participant forms, dates,
+        # phone numbers and amounts from silently adding courses.
+        numeric_choice = re.fullmatch(
+            r"(?:(?:course|option)\s*)?[1-9](?:\s*(?:,|and|&)\s*(?:(?:course|option)\s*)?[1-9])*",
+            text,
+        )
+        if not numeric_choice and ":" not in text and "\n" not in str(value or ""):
+            numeric_choice = len(text) < 100 and any(
+                marker in text
+                for marker in ("course", "dental assist", "infection control", "twice")
+            )
+        if numeric_choice:
+            # A digit in an approved name such as "1-Day" or "2-Day" is not
+            # an option number. Only standalone selection numbers qualify.
+            for match in re.finditer(r"(?<![\d-])([1-9])(?![\d-])", text):
+                position = int(match.group(1))
+                if 1 <= position <= len(self.courses):
+                    mentions.append((match.start(), self.courses[position - 1]))
+        for course in self.courses:
+            aliases = [course.get("name", ""), course.get("code", "")]
+            if course["id"] == "dental-assisting-basic":
+                aliases.extend(("dental assisting", "dental assistant"))
+            if course["id"] == "dental-infection-control":
+                aliases.extend(("infection control", "sterilisation workshop"))
+            found = []
+            for alias in aliases:
+                alias_text = str(alias).casefold().strip()
+                if alias_text:
+                    found.extend(match.start() for match in re.finditer(re.escape(alias_text), text))
+            if found:
+                mentions.append((min(found), course))
+
+        mentions.sort(key=lambda item: item[0])
+        ids = [course["id"] for _, course in mentions]
+        duplicate = len(ids) != len(set(ids)) or bool(
+            re.search(r"\b(?:twice|two times|again|duplicate)\b", text) and ids
+        )
+        unique = []
+        seen = set()
+        for _, course in mentions:
+            if course["id"] not in seen:
+                unique.append(course)
+                seen.add(course["id"])
+        return unique[:2], duplicate
+
+    def resolve_displayed_course_selection(self, value, course_ids):
+        """Resolve one or two choices against the exact persisted course list.
+
+        The final boolean indicates whether the message attempted a course
+        choice. Unrelated text remains available to normal FAQ routing.
+        """
+        displayed = [
+            course
+            for course_id in course_ids or []
+            if (course := self.course_for(course_id)) is not None
+        ]
+        if not displayed:
+            return [], False, "The displayed course choices are no longer available.", True
+
+        text = " ".join(str(value or "").casefold().split()).strip(" .!?")
+        if not text:
+            return [], False, None, False
+        if re.fullmatch(r"(?:both|all)(?:\s+(?:of\s+the\s+)?courses?)?", text):
+            return list(displayed[:2]), False, None, True
+
+        ordinal = re.fullmatch(
+            r"(?:the\s+)?(first|second|third)(?:\s+(?:course|option|one))?",
+            text,
+        )
+        if ordinal:
+            position = {"first": 1, "second": 2, "third": 3}[ordinal.group(1)]
+            if position <= len(displayed):
+                return [displayed[position - 1]], False, None, True
+            return [], False, "Please choose one of the displayed course numbers.", True
+
+        selected, duplicate = self.match_course_selection(value)
+        displayed_ids = {course["id"] for course in displayed}
+        if duplicate:
+            return [], True, "You cannot select the same course twice.", True
+        if selected:
+            if any(course["id"] not in displayed_ids for course in selected):
+                return [], False, "Please choose only from the displayed courses.", True
+            return selected, False, None, True
+
+        numeric_attempt = re.search(r"\b(?:course|option)\s*\d+\b", text) or re.fullmatch(
+            r"\d+(?:\s*(?:,|and|&)\s*\d+)*", text
+        )
+        if numeric_attempt:
+            return [], False, "Please choose one of the displayed course numbers.", True
+
+        generic = {
+            "a", "an", "the", "course", "courses", "programme", "programmes",
+            "dental", "day", "this", "that", "enrol", "enroll", "register",
+            "join", "want", "like", "please", "me", "i", "to", "in", "for",
+        }
+        supplied_words = set(re.findall(r"[a-z0-9]+", text)) - generic
+        if not supplied_words:
+            return [], False, None, False
+        scores = []
+        for course in displayed:
+            course_words = set(
+                re.findall(
+                    r"[a-z0-9]+",
+                    " ".join(
+                        str(course.get(key, "")).casefold()
+                        for key in ("id", "code", "name")
+                    ),
+                )
+            ) - generic
+            scores.append((len(supplied_words & course_words), course))
+        best = max(score for score, _ in scores)
+        if best:
+            matches = [course for score, course in scores if score == best]
+            if len(matches) > 1:
+                return [], False, "That description could refer to more than one course.", True
+            return [], False, "Please use the course number or full course name.", True
+        return [], False, None, False
+
     def course_choices(self):
         return "\n".join(
             f"{index}. {course['name']} — {self.course_fee_display_for(course)}"

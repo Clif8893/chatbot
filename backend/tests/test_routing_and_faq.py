@@ -318,7 +318,7 @@ def test_misspelt_indirect_fee_question_routes_to_faq(client, conversation_id):
 def test_customer_first_name_personalises_faq_during_enrollment(
     client, conversation_id
 ):
-    send(client, conversation_id, "Please register me")
+    send(client, conversation_id, "Please register me for Dental Assisting")
     send(client, conversation_id, "My name is Test Student")
     payload = send(client, conversation_id, "How much is the fee?").get_json()
     assert payload["message"]["content"].startswith("Hi Test 👋\n\n")
@@ -330,7 +330,7 @@ def test_customer_first_name_personalises_faq_during_enrollment(
 
 
 def test_fee_concern_uses_customer_first_name_once(client, conversation_id):
-    send(client, conversation_id, "Please register me")
+    send(client, conversation_id, "Please register me for Dental Assisting")
     send(client, conversation_id, "My name is Test Student")
     reply = send(client, conversation_id, "Why is the course so expensive?").get_json()[
         "message"

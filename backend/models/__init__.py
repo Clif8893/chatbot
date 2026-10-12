@@ -123,6 +123,56 @@ class EnrollmentDraft(db.Model):
     refund_review_required = db.Column(db.Boolean, nullable=False, default=False)
 
     conversation = db.relationship("Conversation", back_populates="enrollment_draft")
+    course_enrollments = db.relationship(
+        "EnrollmentCourse",
+        back_populates="registration",
+        cascade="all, delete-orphan",
+        order_by="EnrollmentCourse.position",
+    )
+
+
+class EnrollmentCourse(db.Model):
+    """One ordered course/intake selection within a participant registration."""
+
+    __tablename__ = "enrollment_courses"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "enrollment_id", "course_id", name="uq_enrollment_course_id"
+        ),
+        db.UniqueConstraint(
+            "enrollment_id", "position", name="uq_enrollment_course_position"
+        ),
+    )
+
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    enrollment_id = db.Column(
+        db.String(36),
+        db.ForeignKey("enrollment_drafts.id"),
+        nullable=False,
+        index=True,
+    )
+    position = db.Column(db.Integer, nullable=False)
+    course_id = db.Column(db.String(64), nullable=False, index=True)
+    course_name = db.Column(db.String(255), nullable=False)
+    course_fee = db.Column(db.Numeric(10, 2), nullable=True)
+    intake_id = db.Column(db.String(64), nullable=True, index=True)
+    intake_start_date = db.Column(db.Date, nullable=True)
+    intake_end_date = db.Column(db.Date, nullable=True)
+    intake_is_demo = db.Column(db.Boolean, nullable=True)
+    allocated_intake_id = db.Column(db.String(64), nullable=True, index=True)
+    intake_allocated_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="collecting")
+    confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    cancellation_requested_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    cancelled_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    rescheduled_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    previous_intake_id = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = db.Column(
+        db.DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    registration = db.relationship("EnrollmentDraft", back_populates="course_enrollments")
 
 
 from backend.models.accounts import User
@@ -131,6 +181,7 @@ from backend.models.accounts import User
 __all__ = [
     "Conversation",
     "EnrollmentDraft",
+    "EnrollmentCourse",
     "Message",
     "User",
     "date",

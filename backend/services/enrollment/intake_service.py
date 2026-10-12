@@ -6,8 +6,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select, update
 
 from backend.extensions import db
-from backend.models import EnrollmentDraft, utc_now
+from backend.models import EnrollmentCourse, EnrollmentDraft, utc_now
 from backend.models.operations import CourseDate
+from backend.services.enrollment.registration_group_service import sync_registration
 
 
 DEFAULT_COURSE_ID = "dental-assisting-basic"
@@ -195,6 +196,118 @@ class IntakeService:
             )
         draft.allocated_intake_id = None
         draft.intake_allocated_at = None
+        db.session.flush()
+
+    def allocate_registration(self, registration, courses):
+        """Atomically reserve every unallocated child course intake."""
+        pending = [row for row in courses if row.intake_id and row.allocated_intake_id != row.intake_id]
+        if not pending:
+            sync_registration(registration)
+            return
+        for row in pending:
+            error = self.allocation_error(row.intake_id, row)
+            if error:
+                raise ValueError(error)
+            intake = db.session.get(CourseDate, row.intake_id)
+            if intake is None or intake.course_id != row.course_id:
+                raise ValueError(
+                    "The selected intake does not belong to the selected course. "
+                    "Please choose another intake."
+                )
+
+        allocated_at = utc_now()
+        with db.session.begin_nested():
+            for row in pending:
+                previous_id = row.allocated_intake_id
+                expected = (
+                    EnrollmentCourse.allocated_intake_id.is_(None)
+                    if previous_id is None
+                    else EnrollmentCourse.allocated_intake_id == previous_id
+                )
+                claim = db.session.execute(
+                    update(EnrollmentCourse)
+                    .where(EnrollmentCourse.id == row.id, expected)
+                    .values(
+                        allocated_intake_id=row.intake_id,
+                        intake_allocated_at=allocated_at,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if claim.rowcount != 1:
+                    current = db.session.execute(
+                        select(EnrollmentCourse.allocated_intake_id).where(
+                            EnrollmentCourse.id == row.id
+                        )
+                    ).scalar_one()
+                    if current == row.intake_id:
+                        continue
+                    raise ValueError(
+                        "The intake allocation changed. Please review and confirm again."
+                    )
+                result = db.session.execute(
+                    update(CourseDate)
+                    .where(
+                        CourseDate.id == row.intake_id,
+                        CourseDate.course_id == row.course_id,
+                        CourseDate.status == "open",
+                        CourseDate.date > self.today,
+                        func.coalesce(CourseDate.participant_count, 0)
+                        < CourseDate.capacity,
+                    )
+                    .values(
+                        participant_count=func.coalesce(
+                            CourseDate.participant_count, 0
+                        )
+                        + 1
+                    )
+                )
+                if result.rowcount != 1:
+                    raise ValueError(self.allocation_error(row.intake_id, row))
+                if previous_id and previous_id != row.intake_id:
+                    db.session.execute(
+                        update(CourseDate)
+                        .where(
+                            CourseDate.id == previous_id,
+                            CourseDate.participant_count > 0,
+                        )
+                        .values(
+                            participant_count=CourseDate.participant_count - 1
+                        )
+                    )
+        for row in pending:
+            row.allocated_intake_id = row.intake_id
+            row.intake_allocated_at = allocated_at
+        sync_registration(registration)
+        db.session.flush()
+
+    def release_course(self, course):
+        """Release one child allocation once without affecting sibling courses."""
+        if not course.allocated_intake_id:
+            return
+        previous_id = course.allocated_intake_id
+        with db.session.begin_nested():
+            claim = db.session.execute(
+                update(EnrollmentCourse)
+                .where(
+                    EnrollmentCourse.id == course.id,
+                    EnrollmentCourse.allocated_intake_id == previous_id,
+                )
+                .values(allocated_intake_id=None, intake_allocated_at=None)
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                return
+            db.session.execute(
+                update(CourseDate)
+                .where(
+                    CourseDate.id == previous_id,
+                    CourseDate.participant_count > 0,
+                )
+                .values(participant_count=CourseDate.participant_count - 1)
+            )
+        course.allocated_intake_id = None
+        course.intake_allocated_at = None
+        sync_registration(course.registration)
         db.session.flush()
 
 

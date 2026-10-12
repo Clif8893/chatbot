@@ -3,6 +3,7 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import inspect, text
 
@@ -199,6 +200,56 @@ def apply_additive_migrations():
                     "ON messages (conversation_id, sequence)"
                 )
             )
+
+        if "enrollment_courses" in tables and "enrollment_drafts" in tables:
+            legacy_rows = connection.execute(
+                text(
+                    "SELECT d.id, d.course_id, d.course, d.course_fee, d.intake_id, "
+                    "d.intake_start_date, d.intake_end_date, d.intake_is_demo, "
+                    "d.allocated_intake_id, d.intake_allocated_at, d.status, "
+                    "d.confirmed_at, d.cancelled_at, d.rescheduled_at, "
+                    "d.previous_intake_id, d.created_at, d.updated_at "
+                    "FROM enrollment_drafts d WHERE d.course IS NOT NULL "
+                    "AND NOT EXISTS (SELECT 1 FROM enrollment_courses c "
+                    "WHERE c.enrollment_id = d.id)"
+                )
+            ).mappings()
+            insert = text(
+                "INSERT INTO enrollment_courses (id, enrollment_id, position, "
+                "course_id, course_name, course_fee, intake_id, intake_start_date, "
+                "intake_end_date, intake_is_demo, allocated_intake_id, "
+                "intake_allocated_at, status, confirmed_at, cancelled_at, "
+                "rescheduled_at, previous_intake_id, created_at, updated_at) "
+                "VALUES (:id, :enrollment_id, 1, :course_id, :course_name, "
+                ":course_fee, :intake_id, :intake_start_date, :intake_end_date, "
+                ":intake_is_demo, :allocated_intake_id, :intake_allocated_at, "
+                ":status, :confirmed_at, :cancelled_at, :rescheduled_at, "
+                ":previous_intake_id, :created_at, :updated_at)"
+            )
+            for row in legacy_rows:
+                connection.execute(
+                    insert,
+                    {
+                        "id": str(uuid4()),
+                        "enrollment_id": row["id"],
+                        "course_id": row["course_id"] or "dental-assisting-basic",
+                        "course_name": row["course"],
+                        "course_fee": row["course_fee"] or 0,
+                        "intake_id": row["intake_id"],
+                        "intake_start_date": row["intake_start_date"],
+                        "intake_end_date": row["intake_end_date"],
+                        "intake_is_demo": row["intake_is_demo"],
+                        "allocated_intake_id": row["allocated_intake_id"],
+                        "intake_allocated_at": row["intake_allocated_at"],
+                        "status": row["status"],
+                        "confirmed_at": row["confirmed_at"],
+                        "cancelled_at": row["cancelled_at"],
+                        "rescheduled_at": row["rescheduled_at"],
+                        "previous_intake_id": row["previous_intake_id"],
+                        "created_at": row["created_at"],
+                        "updated_at": row["updated_at"],
+                    },
+                )
 
         if "course_dates" in tables:
             existing = {

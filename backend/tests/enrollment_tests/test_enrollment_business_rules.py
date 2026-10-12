@@ -69,8 +69,7 @@ def test_invalid_dob_is_not_saved_or_allowed_to_progress(tmp_path, fake_ai):
     app = business_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "1")
     response = send(
         client,
@@ -95,8 +94,7 @@ def test_invalid_dob_correction_never_overwrites_valid_dob(tmp_path, fake_ai):
     app = business_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "1")
     send(client, conversation_id, VALID_DETAILS)
     response = send(client, conversation_id, "My DOB should be 03/09/2026").get_json()
@@ -167,8 +165,9 @@ def test_natural_intake_selection_uses_database_records(tmp_path, fake_ai, selec
     app = business_app(tmp_path, fake_ai, f"selection-{expected_id}-{len(selection)}.db")
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    offered = send(client, conversation_id, "Yes, this course").get_json()
+    offered = send(
+        client, conversation_id, "I want to enroll in Dental Assisting"
+    ).get_json()
     assert "10–11 October 2026 — Weekend" in offered["message"]["content"]
     response = send(client, conversation_id, selection).get_json()
     assert response["enrollment"]["selected_intake"]["id"] == expected_id
@@ -179,8 +178,7 @@ def test_ambiguous_weekend_intake_requires_clarification(tmp_path, fake_ai):
     app = business_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     response = send(client, conversation_id, "weekend intake").get_json()
     assert "more than one intake" in response["message"]["content"]
     assert response["enrollment"]["selected_intake"] is None
@@ -201,8 +199,7 @@ def test_unavailable_intakes_cannot_be_selected(tmp_path, fake_ai, status, expec
         db.session.commit()
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     response = send(client, conversation_id, "10 October 2026").get_json()
     assert expected in response["message"]["content"].casefold()
     assert response["enrollment"]["selected_intake"] is None
@@ -219,8 +216,7 @@ def test_historical_intake_is_rejected_by_singapore_date(tmp_path, fake_ai):
 
 
 def _ready_for_confirmation(client, conversation_id, intake="1"):
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, intake)
     return send(client, conversation_id, VALID_DETAILS).get_json()
 
@@ -273,8 +269,7 @@ def test_selected_intake_and_validation_state_survive_restart_and_login(tmp_path
     app = business_app(tmp_path, fake_ai, database_name)
     client = authenticated_client(app, email="restart-owner@example.com")
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "2")
     restarted = business_app(tmp_path, fake_ai, database_name)
     resumed = restarted.test_client()

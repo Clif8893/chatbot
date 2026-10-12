@@ -15,6 +15,10 @@ from backend.services.conversation_repository import archive_discarded_draft
 from backend.services.privacy import mask_nric, mask_nrics_in_text
 from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
 from backend.services.enrollment.validation import validate_field
+from backend.services.enrollment.registration_group_service import (
+    display_range as display_course_range,
+    ordered_courses,
+)
 
 
 AWAITING_CANCELLATION = "awaiting_cancellation_confirmation"
@@ -741,7 +745,17 @@ class EnrollmentManagementService:
         lines = [f"Hi {name} 👋" if name else "Hi 👋", "", "📋 Enrollment Status", ""]
         status = self._status_label(draft)
         lines.append(f"- Status: {status}")
-        if draft.course:
+        grouped = ordered_courses(draft, include_cancelled=True)
+        if len(grouped) > 1:
+            for course in grouped:
+                lines.extend(
+                    (
+                        f"- Course {course.position}: {course.course_name}",
+                        f"  Intake: {display_course_range(course)}",
+                        f"  Status: {course.status.replace('_', ' ').title()}",
+                    )
+                )
+        elif draft.course:
             lines.append(f"- Course: {draft.course}")
 
         if draft.status == "cancelled":
@@ -755,7 +769,8 @@ class EnrollmentManagementService:
             return "\n".join(lines)
 
         if draft.confirmed_at and draft.status in ACTIVE_STATUSES:
-            lines.append(f"- Intake: {self._intake_display(draft)}")
+            if len(grouped) <= 1:
+                lines.append(f"- Intake: {self._intake_display(draft)}")
             course = self.catalogue.course_for(draft.course) or self.catalogue.course
             lines.append(f"- Time: {course.get('training_time', '9:30am–5:30pm')}")
             if draft.friendly_reference:

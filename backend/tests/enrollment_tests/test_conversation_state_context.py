@@ -105,28 +105,19 @@ def test_discard_archives_draft_clears_state_and_restart_is_fresh(tmp_path, fake
     assert conversation_id in listed_ids
     assert len(listed_ids) == 1
 
+    classifier_calls = len(fake_ai.classify_calls)
+    enrollment_calls = len(fake_ai.enrollment_calls)
     restarted = send(client, conversation_id, "I want to enrol").get_json()
     assert "Old Student" not in restarted["message"]["content"]
     assert OLD_NRIC not in restarted["message"]["content"]
+    assert "Please choose a course" in restarted["message"]["content"]
+    assert len(fake_ai.classify_calls) == classifier_calls + 1
     assert "Old Student" not in fake_ai.classify_calls[-1]["context"]
     assert "test.student@example.com" not in fake_ai.classify_calls[-1]["context"]
-    assert "Old Student" not in fake_ai.enrollment_calls[-1]["context"]
-    assert "test.student@example.com" not in fake_ai.enrollment_calls[-1]["context"]
+    assert len(fake_ai.enrollment_calls) == enrollment_calls
     with app.app_context():
         fresh = db.session.get(Conversation, conversation_id).enrollment_draft
-        assert fresh is not None and fresh.id != old_draft_id
-        for field in (
-            "full_name",
-            "nric",
-            "date_of_birth",
-            "email",
-            "mobile_number",
-            "preferred_intake_date",
-            "payment_method",
-            "skillsfuture_amount",
-            "paynow_amount",
-        ):
-            assert getattr(fresh, field) is None
+        assert fresh is None
 
 
 def test_repeated_discard_is_idempotent_and_keep_preserves_draft(tmp_path, fake_ai):
@@ -337,6 +328,6 @@ def test_ambiguous_fallback_receives_masked_scoped_context(tmp_path, fake_ai):
     ):
         assert sensitive_value not in call["context"]
     assert call["active_intent"] == "enrollment"
-    assert call["draft_summary"]["status"] == "awaiting_confirmation"
+    assert call["draft_summary"]["status"] == "collecting"
     assert "nric" in call["draft_summary"]["saved_fields"]
     assert OLD_NRIC not in str(call["draft_summary"])

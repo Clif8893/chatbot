@@ -131,7 +131,7 @@ def test_history_survives_a_new_application_instance(tmp_path, fake_ai):
     assert [message["outcome_status"] for message in messages] == ["success", "success"]
 
 
-def test_pending_course_offer_survives_restart_logout_and_login(tmp_path, fake_ai):
+def test_pending_course_offer_survives_restart_without_automatic_selection(tmp_path, fake_ai):
     database_uri = f"sqlite:///{(tmp_path / 'pending-offer.db').as_posix()}"
     first_app = create_app(
         {"TESTING": True, "SQLALCHEMY_DATABASE_URI": database_uri},
@@ -167,7 +167,8 @@ def test_pending_course_offer_survives_restart_logout_and_login(tmp_path, fake_a
     assert listed[0]["conversation_id"] == conversation_id
     resumed = send(second_client, conversation_id, "yes please").get_json()
     assert resumed["routing"]["intent"] == "enrollment"
-    assert "Full name as shown on NRIC:" in resumed["message"]["content"]
+    assert "Please choose a course" in resumed["message"]["content"]
+    assert resumed["enrollment"]["status"] is None
 
 
 def test_enrollment_progress_survives_application_restart(tmp_path, fake_ai):
@@ -180,7 +181,7 @@ def test_enrollment_progress_survives_application_restart(tmp_path, fake_ai):
     conversation_id = first_client.post("/api/conversations").get_json()[
         "conversation_id"
     ]
-    send(first_client, conversation_id, "I want to enroll")
+    send(first_client, conversation_id, "I want to enroll in Dental Assisting")
     send(first_client, conversation_id, "My name is Test Student")
 
     second_app = create_app(
@@ -219,7 +220,7 @@ def test_enrollment_progress_survives_application_restart(tmp_path, fake_ai):
 def test_nric_is_masked_in_history_agent_context_and_logs(
     client, conversation_id, fake_ai, caplog
 ):
-    send(client, conversation_id, "I want to enroll")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "My NRIC is S1234567D")
     send(client, conversation_id, "My email is test.student@example.com")
     history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
@@ -238,7 +239,7 @@ def test_nric_is_masked_in_history_agent_context_and_logs(
 def test_identity_and_contact_values_are_redacted_at_ai_and_log_boundaries(
     client, conversation_id, fake_ai, caplog
 ):
-    send(client, conversation_id, "I want to enroll")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     message = (
         "Full name: Avery Tan; NRIC: S1234567D; Date of birth: 2000-05-15; "
         "Email: avery.private@example.com; Mobile: 91234567"

@@ -143,7 +143,14 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
     enrollment_conversation_id = client.post(
         "/api/conversations"
     ).get_json()["conversation_id"]
-    assert send(client, enrollment_conversation_id, "I want to enrol").status_code == 200
+    assert send(
+        client,
+        enrollment_conversation_id,
+        "I want to enrol in Dental Assisting",
+    ).status_code == 200
+    assert send(
+        client, enrollment_conversation_id, "My name is Test Student"
+    ).status_code == 200
 
     schemas = [crew.task.output_pydantic for crew in recorded]
     assert schemas == [

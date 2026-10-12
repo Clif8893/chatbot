@@ -21,6 +21,10 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from backend.extensions import db
 from backend.models import EnrollmentDraft, utc_now
 from backend.models.finance import FinanceAudit, InvoiceGeneration, MasterInvoiceExport
+from backend.services.enrollment.registration_group_service import (
+    display_range as display_course_range,
+    invoice_courses,
+)
 from backend.services.privacy import mask_nric
 
 
@@ -316,6 +320,7 @@ class InvoiceTemplateService:
         invoice_date = self._invoice_date(enrollment.id)
         intake_date = enrollment.intake_start_date or enrollment.preferred_intake_date
         intake_end = enrollment.intake_end_date or intake_date
+        courses = invoice_courses(enrollment)
 
         green = "007A64"
         pale = "EAF5F1"
@@ -360,12 +365,29 @@ class InvoiceTemplateService:
         sheet.merge_cells("A18:K18")
         sheet["A18"] = "COURSE DETAILS"
         _section(sheet["A18"], green)
-        _label_value(sheet, 22, "A", "Course:", "C", enrollment.course, end="K")
-        course = self.catalogue.course_for(enrollment.course_id or enrollment.course) if self.catalogue else None
-        course_code = course.get("code") if course else None
-        _label_value(sheet, 24, "A", "Course code:", "C", course_code, end="E")
-        _label_value(sheet, 24, "G", "Training time:", "I", "9:30am–5:30pm", end="K")
-        _label_value(sheet, 26, "A", "Training date(s):", "C", _date_range(intake_date, intake_end), end="E")
+        if len(courses) > 1:
+            for column, label in (("A", "Description"), ("F", "Course code"), ("H", "Intake"), ("K", "Amount")):
+                sheet[f"{column}20"] = label
+                sheet[f"{column}20"].font = Font(name="Aptos", size=9, bold=True, color=grey)
+            for row_number, selected in zip((22, 25), courses):
+                course = self.catalogue.course_for(selected.course_id) if self.catalogue else None
+                sheet.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=5)
+                sheet.cell(row_number, 1, selected.course_name)
+                sheet.merge_cells(start_row=row_number, start_column=6, end_row=row_number, end_column=7)
+                sheet.cell(row_number, 6, course.get("code") if course else "")
+                sheet.merge_cells(start_row=row_number, start_column=8, end_row=row_number, end_column=10)
+                sheet.cell(row_number, 8, display_course_range(selected))
+                sheet.cell(row_number, 11, float(_money(selected.course_fee)))
+                sheet.cell(row_number, 11).number_format = '"S$"#,##0.00'
+                for cell in sheet[row_number][0:11]:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+        else:
+            _label_value(sheet, 22, "A", "Course:", "C", enrollment.course, end="K")
+            course = self.catalogue.course_for(enrollment.course_id or enrollment.course) if self.catalogue else None
+            course_code = course.get("code") if course else None
+            _label_value(sheet, 24, "A", "Course code:", "C", course_code, end="E")
+            _label_value(sheet, 24, "G", "Training time:", "I", "9:30am–5:30pm", end="K")
+            _label_value(sheet, 26, "A", "Training date(s):", "C", _date_range(intake_date, intake_end), end="E")
         sheet.merge_cells("A29:K29")
         sheet["A29"] = "AMOUNT DUE"
         _section(sheet["A29"], green)
@@ -380,7 +402,7 @@ class InvoiceTemplateService:
             amount_cell = sheet.cell(
                 row,
                 8,
-                "=H30" if row == 36 else float(amount),
+                ("=SUM(K22,K25)" if len(courses) > 1 else "=H30") if row == 36 else float(amount),
             )
             amount_cell.number_format = '"S$"#,##0.00'
             amount_cell.alignment = Alignment(horizontal="right")
@@ -409,10 +431,10 @@ class InvoiceTemplateService:
         sheet["B47"] = _safe_excel_text(mask_nric(enrollment.nric))
         sheet["I46"] = _safe_excel_text(invoice_number)
         sheet["I47"] = invoice_date
-        sheet["A48"] = _safe_excel_text(enrollment.course)
+        sheet["A48"] = _safe_excel_text("; ".join(row.course_name for row in courses) if courses else enrollment.course)
         sheet["I48"] = float(_money(enrollment.course_fee))
         sheet["A49"] = intake_date
-        sheet["I50"] = "=H30"
+        sheet["I50"] = "=SUM(K22,K25)" if len(courses) > 1 else "=H30"
 
         sheet.sheet_view.showGridLines = False
         sheet.print_area = "A1:K43"
@@ -435,11 +457,13 @@ class InvoiceTemplateService:
         workbook = load_workbook(workbook_path, data_only=False, read_only=False)
         try:
             sheet = workbook[self.sheet_name]
+            courses = invoice_courses(enrollment)
+            expected_courses = [row.course_name for row in courses] or [enrollment.course]
             expected = (
                 invoice_number,
                 enrollment.full_name,
-                enrollment.course,
                 mask_nric(enrollment.nric),
+                *expected_courses,
             )
             visible = " ".join(
                 str(cell.value) for row in sheet.iter_rows(min_row=1, max_row=43)

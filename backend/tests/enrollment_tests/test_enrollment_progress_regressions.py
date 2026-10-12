@@ -36,18 +36,17 @@ def regression_app(tmp_path, fake_ai, *, demos=True, name="regressions.db"):
 
 def start_with_identity(client):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
-    send(client, conversation_id, "Yes, this course")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     send(client, conversation_id, "1")
     send(client, conversation_id, IDENTITY)
     return conversation_id
 
 
-def test_invalid_dob_is_only_a_correction_and_missing_intake_is_separate(tmp_path, fake_ai):
+def test_participant_details_cannot_bypass_required_intake_selection(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
     response = send(
         client,
         conversation_id,
@@ -55,15 +54,13 @@ def test_invalid_dob_is_only_a_correction_and_missing_intake_is_separate(tmp_pat
         "Email: alex.manual@example.com; Mobile: 91234567",
     ).get_json()
     content = response["message"]["content"]
-    correction = content.split("Still needed", 1)[0]
-    assert "Needs correction" in correction
-    assert "Date of birth" in correction
-    assert "Preferred course intake/date" not in correction
-    assert "Still needed" in content
-    assert "Preferred course intake/date" in content
     assert "Available Intake Dates" in content
     assert "10–11 October 2026" in content
-    assert "dates are being updated" not in content
+    assert "reply with the intake number or the dates you prefer" in content
+    with app.app_context():
+        draft = EnrollmentDraft.query.one()
+        assert draft.full_name is None
+        assert draft.date_of_birth is None
 
 
 def test_no_intakes_fallback_only_when_database_has_no_selectable_rows(tmp_path, fake_ai):
@@ -166,7 +163,8 @@ def test_historical_payment_fields_are_not_changed_by_enrollment_chat(tmp_path, 
 
 def prepare_progress_draft(client):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    send(client, conversation_id, "I want to enroll")
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(
         client,
         conversation_id,
@@ -196,8 +194,8 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_ai(tmp_path, 
     assert "Needs Correction" in content
     assert "Date of birth" in content
     assert "Payment allocation" not in content
-    assert "Still Needed" in content
-    assert "Preferred course intake/date" in content
+    assert "Still Needed" not in content
+    assert "Preferred course intake/date" not in content
     assert "requires the corrections shown above" in content
     assert "already recorded" not in content
     assert "confirmed information" not in content
