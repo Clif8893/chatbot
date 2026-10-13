@@ -6,9 +6,14 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from backend.extensions import db
-from backend.models import Conversation, EnrollmentDraft, utc_now
+from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft, utc_now
 from backend.models.communications import OutboundMessage
-from backend.models.finance import FinanceCase, InvoiceGeneration, Payment
+from backend.models.finance import (
+    FinanceCase,
+    InvoiceGeneration,
+    MasterInvoiceExport,
+    Payment,
+)
 from backend.services.invoice_email_service import InvoiceEmailError, ResendCooldownError
 from backend.models.operations import AuditEvent, CourseDate, StaffEscalation
 from backend.services.conversation_repository import archive_discarded_draft
@@ -16,8 +21,13 @@ from backend.services.privacy import mask_nric, mask_nrics_in_text
 from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
 from backend.services.enrollment.validation import validate_field
 from backend.services.enrollment.registration_group_service import (
+    add_course,
+    clear_intake as clear_course_intake,
     display_range as display_course_range,
     ordered_courses,
+    save_intake,
+    sync_registration,
+    total_fee,
 )
 
 
@@ -30,6 +40,12 @@ AWAITING_CHANGE_SELECTION = "awaiting_change_selection"
 AWAITING_CHANGE_CONFIRMATION = "awaiting_change_confirmation"
 AWAITING_COURSE_CHANGE_SELECTION = "awaiting_course_change_selection"
 AWAITING_COURSE_CHANGE_INTAKE = "awaiting_course_change_intake"
+AWAITING_COURSE_CANCELLATION_SELECTION = "cancel_course_selection"
+LEGACY_COURSE_CANCELLATION_SELECTION = "awaiting_course_cancellation_selection"
+AWAITING_COURSE_CANCELLATION_CONFIRMATION = "awaiting_course_cancellation_confirmation"
+AWAITING_COURSE_ADDITION_INTAKE = "awaiting_course_addition_intake"
+AWAITING_COURSE_ADDITION_CONFIRMATION = "awaiting_course_addition_confirmation"
+POST_CONFIRMATION_ADD_COURSE = "post_confirmation_add_course"
 
 ACTIVE_STATUSES = {
     "confirmed",
@@ -80,10 +96,134 @@ class EnrollmentManagementService:
             and _as_utc(conversation.pending_action_requested_at)
             < utc_now() - timedelta(minutes=30)
         ):
+            if conversation.pending_action in {
+                AWAITING_COURSE_ADDITION_INTAKE,
+                AWAITING_COURSE_ADDITION_CONFIRMATION,
+            }:
+                self._abandon_course_addition(
+                    conversation, self._pending_owned_draft(conversation)
+                )
             self._clear_pending(conversation)
             db.session.commit()
 
         state = conversation.pending_action
+        if state in {
+            AWAITING_COURSE_CANCELLATION_SELECTION,
+            LEGACY_COURSE_CANCELLATION_SELECTION,
+        }:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                if draft is not None:
+                    self._audit(draft, "course_cancellation_kept", "Participant kept both courses")
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — both course enrollments remain unchanged.",
+                    draft,
+                    "course_cancellation_kept",
+                )
+            pending_draft = self._pending_owned_draft(conversation)
+            if (
+                pending_draft is not None
+                and self._match_grouped_course(
+                    pending_draft,
+                    text,
+                    (conversation.pending_change_data or {}).get(
+                        "cancellable_course_ids"
+                    ),
+                ) is not None
+            ) or (
+                is_cancellation_request(text)
+                or _is_numeric_menu_attempt(text)
+                or _both_courses_choice(text)
+            ):
+                return self._select_course_cancellation(conversation, text)
+
+        if state == AWAITING_COURSE_CANCELLATION_CONFIRMATION:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                if draft is not None:
+                    self._audit(draft, "course_cancellation_kept", "Participant kept both courses")
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — both course enrollments remain unchanged.",
+                    draft,
+                    "course_cancellation_kept",
+                )
+            if _confirms_cancellation(text):
+                return self._confirm_course_cancellation(conversation)
+
+        if state == AWAITING_COURSE_ADDITION_INTAKE:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._abandon_course_addition(conversation, draft)
+                self._clear_pending(conversation)
+                if draft is not None:
+                    self._audit(
+                        draft,
+                        "course_addition_abandoned",
+                        "Participant kept the existing confirmed course",
+                    )
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your confirmed enrollment remains unchanged.",
+                    draft,
+                    "course_addition_kept",
+                )
+            if _looks_like_intake_selection(text):
+                return self._select_course_addition_intake(conversation, text)
+
+        if state == AWAITING_COURSE_ADDITION_CONFIRMATION:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._abandon_course_addition(conversation, draft)
+                self._clear_pending(conversation)
+                if draft is not None:
+                    self._audit(
+                        draft,
+                        "course_addition_abandoned",
+                        "Participant kept the existing confirmed course",
+                    )
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your confirmed enrollment remains unchanged.",
+                    draft,
+                    "course_addition_kept",
+                )
+            if _confirms_course_addition(text):
+                return self._confirm_course_addition(conversation)
+
+        if state is None and conversation.pending_followup == POST_CONFIRMATION_ADD_COURSE:
+            if _accepts_additional_course(text):
+                draft = self._current_or_single(conversation)
+                conversation.pending_followup = None
+                if draft is not None:
+                    self._audit(
+                        draft,
+                        "post_confirmation_add_course_accepted",
+                        "Participant accepted the remaining-course offer",
+                    )
+                db.session.commit()
+                return self._request_course_addition(
+                    conversation, "add the other course"
+                )
+            if _declines_additional_course(text):
+                draft = self._current_or_single(conversation)
+                conversation.pending_followup = None
+                if draft is not None:
+                    self._audit(
+                        draft,
+                        "post_confirmation_add_course_declined",
+                        "Participant declined the remaining-course offer",
+                    )
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your confirmed enrollment is complete. Is there anything else I can help you with today?",
+                    draft,
+                    "course_addition_declined",
+                )
+
         if state == AWAITING_INVOICE_RESEND:
             if _keeps_invoice(text):
                 draft = self._pending_owned_draft(conversation)
@@ -243,10 +383,56 @@ class EnrollmentManagementService:
             if is_reschedule_request(text) or _looks_like_intake_selection(text):
                 return self._select_reschedule_target(conversation, text)
 
+        # Explicit participant-managed changes take priority over status, active
+        # enrollment collection, catalogue matching, and AI fallback routing.
+        if is_cancellation_request(text):
+            return self._request_cancellation(conversation, text)
+        if is_reschedule_request(text):
+            return self._request_reschedule(conversation, text)
+        if is_course_change_request(text):
+            return self._request_course_change(conversation, text)
+        if is_specific_change_request(text):
+            prepared = self._prepare_confirmed_change(conversation, text)
+            if prepared is not None:
+                return prepared
+        if is_general_change_request(text):
+            return self._request_change(conversation, text)
+
         if is_status_query(text):
             context = self.resolver.resolve(conversation, text)
+            if context.enrollment is not None:
+                self._audit(
+                    context.enrollment,
+                    "enrollment_status_viewed",
+                    "Participant requested deterministic grouped enrollment status",
+                )
+                db.session.commit()
+            reply = self.status_context_reply(context)
+            if conversation.pending_action in {
+                AWAITING_COURSE_ADDITION_INTAKE,
+                AWAITING_COURSE_ADDITION_CONFIRMATION,
+            }:
+                pending = conversation.pending_change_data or {}
+                pending_course = self.catalogue.course_for(pending.get("course_id"))
+                pending_intake = self.catalogue.intake_for_id(pending.get("intake_id"))
+                if pending_course is not None:
+                    reply += f"\n\n- Pending addition: {pending_course['name']}"
+                    if pending_intake is not None:
+                        target = db.session.get(CourseDate, pending_intake["id"])
+                        if target is not None:
+                            reply += f" — {self._row_display(target)}"
+                    reply += " — Awaiting your confirmation"
+            if conversation.pending_action in {
+                AWAITING_COURSE_CANCELLATION_SELECTION,
+                LEGACY_COURSE_CANCELLATION_SELECTION,
+                AWAITING_COURSE_CANCELLATION_CONFIRMATION,
+            }:
+                reply += (
+                    "\n\n- Cancellation request: Awaiting your confirmation; "
+                    "all course registrations remain unchanged."
+                )
             return ManagementResult(
-                self.status_context_reply(context),
+                reply,
                 context.enrollment,
                 "status_lookup",
             )
@@ -270,20 +456,12 @@ class EnrollmentManagementService:
                 self._current_or_single(conversation),
                 "no_pending_action",
             )
-        if is_cancellation_request(text):
-            return self._request_cancellation(conversation, text)
-        if is_reschedule_request(text):
-            return self._request_reschedule(conversation, text)
+        if is_course_addition_request(text):
+            result = self._request_course_addition(conversation, text)
+            if result is not None:
+                return result
         if is_invoice_resend_request(text):
             return self._request_invoice_resend(conversation, text)
-        if is_course_change_request(text):
-            return self._request_course_change(conversation, text)
-        if is_specific_change_request(text):
-            prepared = self._prepare_confirmed_change(conversation, text)
-            if prepared is not None:
-                return prepared
-        if is_general_change_request(text):
-            return self._request_change(conversation, text)
         return None
 
     def _request_change(self, conversation, message=""):
@@ -716,6 +894,338 @@ class EnrollmentManagementService:
             db.session.rollback()
             return ManagementResult(str(error), draft, "invoice_resend_unavailable")
 
+    def _abandon_course_addition(self, conversation, draft):
+        pending = dict(conversation.pending_change_data or {})
+        row_id = pending.get("course_enrollment_id")
+        row = db.session.get(EnrollmentCourse, row_id) if row_id else None
+        if draft is None or row is None or row.enrollment_id != draft.id:
+            return
+        if row.allocated_intake_id:
+            self.intakes.release_course(row)
+        if pending.get("reactivated"):
+            clear_course_intake(row)
+            row.status = "cancelled"
+            row.confirmed_at = None
+        else:
+            db.session.delete(row)
+            db.session.flush()
+        sync_registration(draft)
+
+    def _request_course_addition(self, conversation, message):
+        draft = self._current_or_single(conversation)
+        if draft is None or not draft.confirmed_at or draft.status not in ACTIVE_STATUSES:
+            return None
+        active = ordered_courses(draft)
+        if not active:
+            return None
+        conversation.pending_followup = None
+        selected, _ = self.catalogue.match_course_selection(message)
+        selected_course = selected[0] if len(selected) == 1 else self.catalogue.match_course(message)
+        held_ids = {row.course_id for row in active}
+        if selected_course is not None and selected_course["id"] in held_ids:
+            other = next((item for item in self.catalogue.courses if item["id"] not in held_ids), None)
+            if other is None or len(active) >= 2:
+                return ManagementResult(
+                    "You are already registered for that course, and no duplicate registration was created.",
+                    draft,
+                    "course_already_registered",
+                )
+            return ManagementResult(
+                f"You are already registered for {selected_course['name']}; no duplicate was created. "
+                f"You can add {other['name']} as your second course if you wish.",
+                draft,
+                "course_already_registered",
+            )
+        if len(active) >= 2:
+            return ManagementResult(
+                "This registration already contains the maximum of two different courses. "
+                "No duplicate registration was created.",
+                draft,
+                "course_addition_unavailable",
+            )
+        if selected_course is None or selected_course["id"] in held_ids:
+            selected_course = next(
+                (item for item in self.catalogue.courses if item["id"] not in held_ids),
+                None,
+            )
+        if selected_course is None:
+            return None
+        available = list(self.catalogue.selectable_intakes_for(selected_course["id"]))
+        if not available:
+            return ManagementResult(
+                "No future open intake is currently available for the other course. "
+                "Your confirmed enrollment remains unchanged.",
+                draft,
+                "course_addition_unavailable",
+            )
+        historical = next(
+            (
+                row for row in draft.course_enrollments
+                if row.course_id == selected_course["id"]
+            ),
+            None,
+        )
+        reactivated = bool(historical is not None and historical.status == "cancelled")
+        if reactivated and historical.allocated_intake_id:
+            self.intakes.release_course(historical)
+        row, added = add_course(
+            draft,
+            selected_course,
+            self.catalogue,
+            status="pending_addition",
+        )
+        if not added:
+            return ManagementResult(
+                "You are already registered for or currently adding that course. No duplicate was created.",
+                draft,
+                "course_already_registered",
+            )
+        self._set_pending(conversation, AWAITING_COURSE_ADDITION_INTAKE, draft)
+        conversation.pending_change_data = {
+            "course_id": selected_course["id"],
+            "course_enrollment_id": row.id,
+            "reactivated": reactivated,
+        }
+        conversation.pending_intake_options = [item["id"] for item in available]
+        self._audit(
+            draft,
+            "second_course_requested",
+            f"Course {selected_course['id']}; intake selection required",
+        )
+        if reactivated:
+            self._audit(
+                draft,
+                "cancelled_course_reactivated_pending",
+                f"Course {selected_course['id']}; existing child row reused",
+            )
+        db.session.commit()
+        choices = "\n".join(
+            f"{number}. {item['display_date']} — {item['intake_type']}"
+            for number, item in enumerate(available, start=1)
+        )
+        return ManagementResult(
+            f"Your existing enrollment for {active[0].course_name} remains confirmed.\n\n"
+            f"Choose an intake for {selected_course['name']}:\n\n{choices}\n\n"
+            "Reply with the intake number or dates, or “Keep enrollment” to make no change.",
+            draft,
+            "course_addition_intake_required",
+        )
+
+    def _select_course_addition_intake(self, conversation, message):
+        draft = self._pending_owned_draft(conversation)
+        pending = dict(conversation.pending_change_data or {})
+        course = self.catalogue.course_for(pending.get("course_id"))
+        pending_row = (
+            db.session.get(EnrollmentCourse, pending.get("course_enrollment_id"))
+            if pending.get("course_enrollment_id")
+            else None
+        )
+        if (
+            draft is None
+            or course is None
+            or pending_row is None
+            or pending_row.enrollment_id != draft.id
+            or pending_row.status != "pending_addition"
+        ):
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "The pending second-course request is no longer available. No change was made.",
+                draft,
+                "course_addition_unavailable",
+            )
+        selected = None
+        normalised = _normalise(message)
+        if re.fullmatch(r"\d+", normalised) and conversation.pending_intake_options:
+            position = int(normalised)
+            if 1 <= position <= len(conversation.pending_intake_options):
+                selected = self.catalogue.intake_for_id(
+                    conversation.pending_intake_options[position - 1]
+                )
+        if selected is None:
+            selected, _ = self.catalogue.match_intake_selection(message, course["id"])
+        allowed_ids = set(conversation.pending_intake_options or [])
+        if selected is None or selected.get("id") not in allowed_ids:
+            return ManagementResult(
+                "Please choose one of the displayed intake numbers or dates.",
+                draft,
+                "course_addition_intake_required",
+            )
+        target = db.session.get(CourseDate, selected["id"])
+        if not self._course_date_available(target, course["id"]):
+            return ManagementResult(
+                "That intake is no longer available. Please choose another displayed intake; "
+                "your existing enrollment remains confirmed.",
+                draft,
+                "course_addition_intake_required",
+            )
+        active = [
+            row for row in ordered_courses(draft)
+            if row.status != "pending_addition"
+        ]
+        if len(active) != 1 or any(row.course_id == course["id"] for row in active):
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "The registration changed while this request was pending. No duplicate course was added.",
+                draft,
+                "course_addition_unavailable",
+            )
+        existing_fee = Decimal(str(active[0].course_fee or 0))
+        new_fee = Decimal(str(self.catalogue.course_fee_for(course) or 0))
+        save_intake(pending_row, selected, self.catalogue)
+        pending["intake_id"] = target.id
+        conversation.pending_action = AWAITING_COURSE_ADDITION_CONFIRMATION
+        conversation.pending_target_intake_id = target.id
+        conversation.pending_change_data = pending
+        conversation.pending_action_requested_at = utc_now()
+        db.session.commit()
+        return ManagementResult(
+            "Please review the updated two-course registration:\n\n"
+            f"1. {active[0].course_name} — {display_course_range(active[0])} — S${existing_fee:.2f}\n"
+            f"2. {course['name']} — {self._row_display(target)} — S${new_fee:.2f}\n\n"
+            f"Combined total: S${existing_fee + new_fee:.2f}\n\n"
+            "Your first course remains confirmed. Reply “Confirm change” to add the second course, "
+            "or “Keep enrollment” to make no change.",
+            draft,
+            "course_addition_confirmation_required",
+        )
+
+    def _confirm_course_addition(self, conversation):
+        draft = self._pending_owned_draft(conversation)
+        pending = dict(conversation.pending_change_data or {})
+        course = self.catalogue.course_for(pending.get("course_id"))
+        intake_id = pending.get("intake_id")
+        target = db.session.get(CourseDate, intake_id) if intake_id else None
+        pending_row = (
+            db.session.get(EnrollmentCourse, pending.get("course_enrollment_id"))
+            if pending.get("course_enrollment_id")
+            else None
+        )
+        active = (
+            [
+                row for row in ordered_courses(draft)
+                if row.status != "pending_addition"
+            ]
+            if draft is not None
+            else []
+        )
+        if (
+            draft is None
+            or not draft.confirmed_at
+            or draft.status not in ACTIVE_STATUSES
+            or course is None
+            or len(active) != 1
+            or any(row.course_id == course["id"] for row in active)
+            or pending_row is None
+            or pending_row.enrollment_id != draft.id
+            or pending_row.course_id != course["id"]
+            or pending_row.status != "pending_addition"
+        ):
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "The registration changed while this request was pending. No second course was added.",
+                draft,
+                "course_addition_unavailable",
+            )
+        if not self._course_date_available(target, course["id"]):
+            if pending_row is not None:
+                clear_course_intake(pending_row)
+            pending.pop("intake_id", None)
+            conversation.pending_action = AWAITING_COURSE_ADDITION_INTAKE
+            conversation.pending_target_intake_id = None
+            conversation.pending_change_data = pending
+            available = list(self.catalogue.selectable_intakes_for(course["id"]))
+            conversation.pending_intake_options = [item["id"] for item in available]
+            self._audit(
+                draft,
+                "course_readdition_failed",
+                f"Course {course['id']}; selected intake unavailable",
+            )
+            db.session.commit()
+            return ManagementResult(
+                "That intake is no longer available. Please choose another intake; "
+                "your first course remains confirmed.",
+                draft,
+                "course_addition_intake_required",
+            )
+        original_status = draft.status
+        original_confirmed_at = draft.confirmed_at
+        try:
+            intake = self.catalogue.intake_for_id(target.id)
+            if intake is None:
+                raise ValueError("That intake is no longer available.")
+            save_intake(pending_row, intake, self.catalogue)
+            self.intakes.allocate_registration(draft, [pending_row])
+            pending_row.status = "confirmed"
+            pending_row.confirmed_at = utc_now()
+            draft.status = original_status
+            draft.confirmed_at = original_confirmed_at
+            sync_registration(draft)
+            self._clear_pending(conversation)
+            action = (
+                "cancelled_course_readdition_confirmed"
+                if pending.get("reactivated")
+                else "second_course_confirmed"
+            )
+            self._audit(
+                draft,
+                action,
+                f"Course {pending_row.course_id}; intake {pending_row.intake_id}",
+            )
+            db.session.commit()
+        except (ValueError, TypeError) as error:
+            db.session.rollback()
+            draft = self._pending_owned_draft(conversation)
+            pending_row = (
+                db.session.get(
+                    EnrollmentCourse, pending.get("course_enrollment_id")
+                )
+                if pending.get("course_enrollment_id")
+                else None
+            )
+            if pending_row is not None and pending_row.status == "pending_addition":
+                clear_course_intake(pending_row)
+            pending.pop("intake_id", None)
+            conversation.pending_action = AWAITING_COURSE_ADDITION_INTAKE
+            conversation.pending_target_intake_id = None
+            conversation.pending_change_data = pending
+            available = list(self.catalogue.selectable_intakes_for(course["id"]))
+            conversation.pending_intake_options = [item["id"] for item in available]
+            if draft is not None:
+                self._audit(
+                    draft,
+                    "course_readdition_failed",
+                    f"Course {course['id']}; capacity revalidation failed",
+                )
+            db.session.commit()
+            return ManagementResult(
+                f"{error} Please choose another available intake. "
+                "Your first course remains confirmed and unchanged.",
+                draft,
+                "course_addition_failed",
+            )
+        invoice_state = self._refresh_group_invoice(draft)
+        reply = (
+            f"{course['name']} has been added and confirmed. Both courses are now under "
+            "the same registration and invoice."
+        )
+        if invoice_state == "failed":
+            reply += " The invoice update needs a staff retry; no stale version is presented as current."
+        else:
+            reply += " The existing invoice has been updated with both course fees and the combined total."
+        return ManagementResult(reply, draft, "course_added")
+
+    def _course_date_available(self, target, course_id):
+        return bool(
+            target is not None
+            and target.course_id == course_id
+            and target.status == "open"
+            and target.date > self.intakes.today
+            and (target.participant_count or 0) < target.capacity
+        )
+
     def status_reply(self, conversation):
         drafts = self._owned_drafts(conversation)
         current = conversation.enrollment_draft
@@ -775,6 +1285,24 @@ class EnrollmentManagementService:
             lines.append(f"- Time: {course.get('training_time', '9:30am–5:30pm')}")
             if draft.friendly_reference:
                 lines.append(f"- Reference: {draft.friendly_reference}")
+            export = MasterInvoiceExport.query.filter_by(enrollment_id=draft.id).one_or_none()
+            generation = InvoiceGeneration.query.filter_by(enrollment_id=draft.id).one_or_none()
+            if export and export.invoice_number:
+                lines.append(f"- Invoice number: {export.invoice_number}")
+            amount = total_fee(draft)
+            if amount is not None:
+                lines.append(f"- Current invoice total: S${amount:.2f}")
+            if generation is not None:
+                invoice_states = {
+                    "generated": "Ready to download",
+                    "pending": "Generating",
+                    "failed": "Failed - staff can retry",
+                    "needs_review": "Awaiting staff review",
+                    "void": "Unavailable",
+                }
+                lines.append(
+                    f"- Invoice: {invoice_states.get(generation.status, generation.status.replace('_', ' ').title())}"
+                )
             lines.extend(["", "Your enrollment is confirmed ✅"])
             return "\n".join(lines)
 
@@ -815,6 +1343,8 @@ class EnrollmentManagementService:
                 "Enrollment Status\n\nNo saved enrollment was found for your account. "
                 "You can start an enrollment whenever you're ready."
             )
+        if len(ordered_courses(draft, include_cancelled=True)) > 1:
+            return self._single_status(draft)
         return self._single_context_status(draft, context)
 
     def _single_context_status(self, draft, context):
@@ -938,6 +1468,210 @@ class EnrollmentManagementService:
             value += f" - {context.intake.label}"
         return value
 
+    def _select_course_cancellation(self, conversation, message):
+        draft = self._pending_owned_draft(conversation)
+        if draft is None:
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "The pending course cancellation is no longer available. No change was made.",
+                None,
+                "not_found",
+            )
+        if _both_courses_choice(message):
+            return self._request_cancellation(conversation, "Cancel both courses")
+        course_ids = (conversation.pending_change_data or {}).get(
+            "cancellable_course_ids"
+        )
+        course = self._match_grouped_course(draft, message, course_ids)
+        if course is None:
+            return ManagementResult(
+                self._course_cancellation_choices(draft, course_ids),
+                draft,
+                "course_cancellation_selection_required",
+            )
+        return self._stage_course_cancellation(conversation, draft, course, message)
+
+    def _stage_course_cancellation(self, conversation, draft, course, message=""):
+        if course.status == "cancelled":
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                f"{course.course_name} is already cancelled. The other course remains unchanged.",
+                draft,
+                "already_cancelled",
+            )
+        if self._grouped_course_started(course):
+            self._clear_pending(conversation)
+            self._escalate_once(
+                draft,
+                f"Cancellation requested after the start of {course.course_name}; staff review is required.",
+                "cancellation_review",
+            )
+            self._audit(draft, "course_cancellation_escalated", f"Course {course.course_id} has started")
+            db.session.commit()
+            return ManagementResult(
+                "That course has already started or finished, so I cannot cancel it automatically. "
+                "I’ve referred the request to staff; the registration remains unchanged.",
+                draft,
+                "cancellation_escalated",
+            )
+        course.cancellation_requested_at = utc_now()
+        self._set_pending(conversation, AWAITING_COURSE_CANCELLATION_CONFIRMATION, draft)
+        conversation.pending_change_data = {"course_enrollment_id": course.id}
+        reason = _safe_reason(message)
+        if reason:
+            conversation.pending_change_data["reason"] = reason
+        detail = f"Course {course.course_id}; confirmation required"
+        if reason:
+            detail += f"; reason: {reason}"
+        self._audit(draft, "course_cancellation_requested", detail)
+        db.session.commit()
+        return ManagementResult(
+            "You are requesting to cancel only this course:\n\n"
+            f"- Course: {course.course_name}\n"
+            f"- Intake: {display_course_range(course)}\n\n"
+            "Your other course will remain confirmed. Reply “Confirm course cancellation” to continue, "
+            "or “Keep both courses” to make no change.",
+            draft,
+            "course_cancellation_confirmation_required",
+        )
+
+    def _confirm_course_cancellation(self, conversation):
+        draft = self._pending_owned_draft(conversation)
+        pending = dict(conversation.pending_change_data or {})
+        course_id = pending.get("course_enrollment_id")
+        course = db.session.get(EnrollmentCourse, course_id) if course_id else None
+        if draft is None or course is None or course.enrollment_id != draft.id:
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "The pending course cancellation is no longer available. No change was made.",
+                draft,
+                "not_found",
+            )
+        if course.status == "cancelled":
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                f"{course.course_name} is already cancelled. No further action is required.",
+                draft,
+                "already_cancelled",
+            )
+        if len(ordered_courses(draft)) <= 1:
+            self._clear_pending(conversation)
+            db.session.commit()
+            return ManagementResult(
+                "This is now the only active course. No cancellation was applied; please request cancellation again.",
+                draft,
+                "cancellation_revalidation_required",
+            )
+        if self._grouped_course_started(course):
+            self._clear_pending(conversation)
+            self._escalate_once(
+                draft,
+                f"Cancellation confirmation received after the start of {course.course_name}.",
+                "cancellation_review",
+            )
+            db.session.commit()
+            return ManagementResult(
+                "That course has already started or finished. Staff confirmation is required, "
+                "so neither course was changed automatically.",
+                draft,
+                "cancellation_escalated",
+            )
+
+        paid = self._payment_received(draft)
+        self.intakes.release_course(course)
+        course.status = "cancelled"
+        course.cancelled_at = utc_now()
+        sync_registration(draft)
+        draft.refund_review_required = paid
+        self._clear_pending(conversation)
+        if paid:
+            self._escalate_once(
+                draft,
+                f"A course in paid registration {draft.id} was cancelled; payment review is required.",
+                "payment_refund_review",
+            )
+        detail = f"Course {course.course_id}; one intake place released"
+        if pending.get("reason"):
+            detail += f"; reason: {pending['reason']}"
+        self._audit(draft, "course_cancelled", detail)
+        self._audit(
+            draft,
+            "course_capacity_released",
+            f"Course {course.course_id}; intake {course.intake_id}",
+        )
+        db.session.commit()
+        invoice_state = self._refresh_group_invoice(draft)
+        remaining = ordered_courses(draft)
+        reply = (
+            f"{course.course_name} has been cancelled and its intake place has been released. "
+            f"{remaining[0].course_name} remains confirmed."
+        )
+        if invoice_state == "failed":
+            reply += " The current invoice update needs a staff retry; no stale version is presented as current."
+        else:
+            reply += " The existing invoice has been updated to show the remaining course and revised total."
+        if paid:
+            reply += " Payment or refund handling requires staff confirmation; no refund or credit was issued automatically."
+        return ManagementResult(reply, draft, "course_cancelled")
+
+    def _course_cancellation_choices(self, draft, course_ids=None):
+        rows = self._cancellable_courses(draft, course_ids)
+        lines = ["Which course would you like to cancel?", ""]
+        for number, row in enumerate(rows, start=1):
+            lines.append(f"{number}. {row.course_name} — {display_course_range(row)}")
+        lines.extend(["", "Reply with the course number or name, or “Keep enrollment” to make no change."])
+        return "\n".join(lines)
+
+    def _cancellable_courses(self, draft, course_ids=None):
+        active = {row.id: row for row in ordered_courses(draft)}
+        if course_ids:
+            return [active[row_id] for row_id in course_ids if row_id in active]
+        return list(active.values())
+
+    def _match_grouped_course(self, draft, message, course_ids=None):
+        rows = self._cancellable_courses(draft, course_ids)
+        text = _normalise(message)
+        if re.search(r"\bkeep (?:the )?(?:first|1st|course 1)\b", text):
+            return next((row for row in rows if row.position == 2), None)
+        if re.search(r"\bkeep (?:the )?(?:second|2nd|course 2)\b", text):
+            return next((row for row in rows if row.position == 1), None)
+        number = re.fullmatch(r"(?:course\s*)?([12])", text)
+        if number is None:
+            number = re.search(
+                r"\b(?:cancel|remove|drop|deregister).{0,40}\bcourse\s*([12])\b",
+                text,
+            )
+        if number:
+            position = int(number.group(1)) - 1
+            return rows[position] if 0 <= position < len(rows) else None
+        if re.search(r"\b(?:first|1st)(?: course)?\b", text):
+            return rows[0] if rows else None
+        if re.search(r"\b(?:second|2nd)(?: course)?\b", text):
+            return rows[1] if len(rows) > 1 else None
+        recognised, _ = self.catalogue.match_course_selection(message)
+        recognised_ids = {item["id"] for item in recognised}
+        matches = [
+            row for row in rows
+            if row.course_id in recognised_ids
+        ]
+        direct = self.catalogue.course_for(message)
+        if not matches and direct is not None:
+            matches = [row for row in rows if row.course_id == direct["id"]]
+        if matches:
+            return matches[0]
+        lowered = message.casefold()
+        return next(
+            (row for row in rows if row.course_name.casefold() in lowered),
+            None,
+        )
+
+    def _grouped_course_started(self, course):
+        return bool(course.intake_start_date and course.intake_start_date <= self.intakes.today)
+
     def _request_cancellation(self, conversation, message):
         draft, multiple_reply = self._action_target(conversation, message)
         if multiple_reply:
@@ -964,6 +1698,37 @@ class EnrollmentManagementService:
                 "or “Keep draft” to continue later.",
                 draft,
                 "draft_discard_requested",
+            )
+        active_courses = ordered_courses(draft)
+        self._audit(
+            draft,
+            "cancellation_intent_detected",
+            "Deterministic cancellation routing selected",
+        )
+        if len(active_courses) > 1 and not _whole_registration_cancellation(message):
+            selected = self._match_grouped_course(draft, message)
+            if selected is not None:
+                return self._stage_course_cancellation(
+                    conversation, draft, selected, message
+                )
+            self._set_pending(
+                conversation, AWAITING_COURSE_CANCELLATION_SELECTION, draft
+            )
+            conversation.pending_change_data = {
+                "cancellable_course_ids": [row.id for row in active_courses]
+            }
+            self._audit(
+                draft,
+                "course_cancellation_selection_requested",
+                "Participant must choose one course or explicitly cancel the whole registration",
+            )
+            db.session.commit()
+            return ManagementResult(
+                self._course_cancellation_choices(
+                    draft, [row.id for row in active_courses]
+                ),
+                draft,
+                "course_cancellation_selection_required",
             )
         if self._course_started(draft) or draft.status in FINISHED_STATUSES:
             self._escalate_once(
@@ -1044,7 +1809,15 @@ class EnrollmentManagementService:
             )
 
         paid = self._payment_received(draft)
-        self.intakes.release(draft)
+        grouped = ordered_courses(draft)
+        if grouped:
+            for course in grouped:
+                self.intakes.release_course(course)
+                course.status = "cancelled"
+                course.cancelled_at = utc_now()
+            sync_registration(draft)
+        else:
+            self.intakes.release(draft)
         draft.status = "cancelled"
         draft.cancelled_at = utc_now()
         draft.confirmed_at = None
@@ -1439,12 +2212,58 @@ class EnrollmentManagementService:
 
     def _update_master_invoice(self, draft):
         if self.master_invoice is None:
-            return
+            return True
         try:
             self.master_invoice.mark_needs_update(draft.id)
-            self.master_invoice.update_exported_enrollment(draft.id, "participant")
+            return bool(
+                self.master_invoice.update_exported_enrollment(
+                    draft.id, "participant"
+                )
+            )
         except Exception:
             db.session.rollback()
+            return False
+
+    def _refresh_group_invoice(self, draft):
+        """Refresh the existing invoice identity after a grouped-course change."""
+        master_updated = self._update_master_invoice(draft)
+        if self.invoice_templates is None:
+            return "disabled" if master_updated else "failed"
+        try:
+            generation = self.invoice_templates.generate(
+                draft, actor="participant", force=True
+            )
+            if generation is None:
+                return "disabled" if master_updated else "failed"
+            if generation.status != "generated":
+                self._audit(
+                    draft,
+                    "group_invoice_update_failed",
+                    "Participant invoice regeneration is retryable",
+                )
+                db.session.commit()
+                return "failed"
+            if self.invoice_email is not None:
+                try:
+                    self.invoice_email.queue_automatic(draft, generation)
+                except Exception:
+                    db.session.rollback()
+            self._audit(
+                draft,
+                "group_invoice_updated",
+                f"Invoice version {generation.version}; master invoice {'updated' if master_updated else 'retry required'}",
+            )
+            db.session.commit()
+            return "generated" if master_updated else "failed"
+        except Exception:
+            db.session.rollback()
+            self._audit(
+                draft,
+                "group_invoice_update_failed",
+                "Participant invoice regeneration is retryable",
+            )
+            db.session.commit()
+            return "failed"
 
     def _intake_display(self, draft):
         start = draft.intake_start_date or draft.preferred_intake_date
@@ -1473,13 +2292,51 @@ def is_cancellation_request(message):
         for pattern in (
             r"^cancel$",
             r"\bcancel (?:my )?(?:enrolment|enrollment|registration|course|intake)\b",
+            r"\bcancel (?:my )?.*\bcourse\b",
+            r"\bcancel (?:my )?.*\b(?:dental assist\w*|infection control|sterilisation)\b",
             r"\bcancel (?:my )?.*\bintake\b",
             r"\bwithdraw\b",
             r"\bremove me from (?:the )?course\b",
+            r"\bremove (?:course\s*[12]|(?:the )?(?:first|second|1st|2nd) course)\b",
+            r"\bdrop (?:course\s*[12]|(?:the )?(?:first|second|1st|2nd) course)\b",
+            r"\bremove (?:the )?(?:first|second|1st|2nd|course [12]).*\bcourse\b",
+            r"\bcancel (?:the )?(?:first|second|1st|2nd|course [12])\b",
+            r"\bcancel .*(?:courses|entire enrollment|entire enrolment|whole registration)\b",
+            r"\bderegister (?:me )?(?:from )?\b",
+            r"\bonly want to keep (?:the )?(?:first|second|1st|2nd|course [12])\b",
             r"\bcannot attend anymore\b",
             r"\bchanged? my mind\b",
             r"\bdon t want to continue (?:with )?(?:my )?(?:registration|enrolment|enrollment)\b",
         )
+    )
+
+
+def is_course_addition_request(message):
+    text = _normalise(message)
+    return bool(
+        re.search(r"\b(?:want|take|enrol|enroll|register).*(?:both|all) courses\b", text)
+        or
+        re.search(
+            r"\b(?:add|include|also take|also enrol|also enroll|enrol|enroll|register|sign up)\b",
+            text,
+        )
+        and (
+            "other course" in text
+            or "second course" in text
+            or "infection control" in text
+            or "dental assist" in text
+        )
+    )
+
+
+def _whole_registration_cancellation(message):
+    text = _normalise(message)
+    return bool(
+        re.search(
+            r"\b(?:both|all|entire|whole)\b.*\b(?:courses?|registration|enrolment|enrollment)\b",
+            text,
+        )
+        or re.search(r"\bcancel (?:my )?(?:entire|whole) (?:registration|enrolment|enrollment)\b", text)
     )
 
 
@@ -1517,6 +2374,10 @@ def is_status_query(message):
             r"\bdid (?:my )?(?:enrolment|enrollment|registration) go through\b",
             r"\bshow (?:me )?my registration details\b",
             r"\bshow (?:me )?my registration\b",
+            r"\bshow (?:me )?all my (?:enrolments|enrollments|courses)\b",
+            r"\bwhich courses am i registered for\b",
+            r"\bwhich intakes did i (?:select|choose)\b",
+            r"\bwhat happened to my cancelled course\b",
             r"\bam i (?:enrolled|registered)\b",
             r"\bwhat course date am i attending\b",
             r"\bdid my reschedul.*work\b",
@@ -1621,7 +2482,10 @@ def _normalise(message):
 
 
 def _confirms_cancellation(message):
-    return _normalise(message) in {"confirm cancellation", "confirm cancel", "yes", "yes please"}
+    return _normalise(message) in {
+        "confirm cancellation", "confirm course cancellation", "confirm cancel",
+        "yes", "yes please",
+    }
 
 
 def _confirms_reschedule(message):
@@ -1634,6 +2498,13 @@ def _confirms_resend(message):
 
 def _confirms_change(message):
     return _normalise(message) == "confirm change"
+
+
+def _confirms_course_addition(message):
+    return _normalise(message) in {
+        "confirm", "confirm change", "confirm addition", "confirm course addition",
+        "yes", "yes please",
+    }
 
 
 def _keeps_invoice(message):
@@ -1662,7 +2533,39 @@ def _explicit_discard_command(message):
 
 
 def _keeps_enrollment(message):
-    return _normalise(message) in {"keep enrollment", "keep enrolment", "do not cancel", "don t cancel"}
+    return _normalise(message) in {
+        "keep enrollment", "keep enrolment", "keep both courses", "do not cancel",
+        "don t cancel", "cancel the request", "cancel request", "never mind",
+        "nevermind",
+    }
+
+
+def _accepts_additional_course(message):
+    return _normalise(message) in {
+        "yes", "yes please", "yes add another course", "add another course",
+        "add the other course", "i want another course",
+        "show me the remaining course",
+    }
+
+
+def _declines_additional_course(message):
+    return _normalise(message) in {
+        "no", "no thanks", "no thank you", "that s all", "thats all",
+        "that is all", "i m done", "im done",
+    }
+
+
+def _is_numeric_menu_attempt(message):
+    return bool(re.fullmatch(r"(?:course\s*)?\d+", _normalise(message)))
+
+
+def _both_courses_choice(message):
+    return bool(
+        re.fullmatch(
+            r"(?:cancel\s+)?(?:both|all)(?:\s+(?:of\s+the\s+)?courses?)?",
+            _normalise(message),
+        )
+    )
 
 
 def _keeps_draft(message):
@@ -1676,7 +2579,8 @@ def _keeps_current_intake(message):
 def _confirmation_without_pending(message):
     return _normalise(message) in {
         "confirm cancellation", "confirm cancel", "confirm reschedule", "confirm intake change",
-        "confirm resend", "confirm change",
+        "confirm course cancellation", "confirm resend", "confirm change",
+        "confirm addition", "confirm course addition",
     }
 
 

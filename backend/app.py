@@ -283,7 +283,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
                 ],
                 "active_intent": conversation.active_intent,
                 "enrollment": serialize_enrollment(
-                    conversation.enrollment_draft, catalogue
+                    _conversation_enrollment(conversation), catalogue, conversation
                 ),
             }
         )
@@ -406,7 +406,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         )
         if conversation is None:
             return _error_response("NOT_FOUND", "Conversation was not found.", 404)
-        draft = conversation.enrollment_draft
+        draft = _conversation_enrollment(conversation)
         finance_payload = (
             finance_service.serialize_case(finance_service.get_case(draft))
             if draft
@@ -418,7 +418,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         return jsonify(
             conversation_id=conversation_id,
             consent=consent_state(conversation_id),
-            enrollment=serialize_enrollment(draft, catalogue),
+            enrollment=serialize_enrollment(draft, catalogue, conversation),
             finance=finance_payload,
         )
 
@@ -688,6 +688,22 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         )
 
     return app
+
+
+def _conversation_enrollment(conversation):
+    """Resolve an owned registration linked by a persisted pending action."""
+    if conversation.enrollment_draft is not None:
+        return conversation.enrollment_draft
+    if not conversation.pending_enrollment_id or not conversation.user_id:
+        return None
+    draft = db.session.get(EnrollmentDraft, conversation.pending_enrollment_id)
+    if (
+        draft is None
+        or draft.conversation is None
+        or draft.conversation.user_id != conversation.user_id
+    ):
+        return None
+    return draft
 
 
 def _validate_chat_request(incoming_request):

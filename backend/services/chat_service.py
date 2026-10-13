@@ -6,7 +6,10 @@ from datetime import timezone
 
 from backend.agents.schemas import IntentClassification
 from backend.extensions import db
-from backend.services.enrollment.enrollment_service import EnrollmentService
+from backend.services.enrollment.enrollment_service import (
+    EnrollmentService,
+    POST_CONFIRMATION_ADD_COURSE_FOLLOWUP,
+)
 from backend.services.enrollment.registration_group_service import (
     display_range as display_course_range,
     ordered_courses,
@@ -15,6 +18,7 @@ from backend.services.faq_attachments import FAQAttachmentCatalogue
 from backend.services.privacy import mask_nrics_in_text, redact_for_classification
 from backend.services.invoice_email_service import InvoiceEmailError, ResendCooldownError
 from backend.services.enrollment.enrollment_management_service import is_course_change_request
+from backend.models.operations import AuditEvent
 
 
 UNCLEAR_REPLY = (
@@ -317,7 +321,7 @@ class ChatService:
                     "confidence": 1.0,
                     "agent": "intent_classifier",
                 },
-                "enrollment": serialize_enrollment(draft, self.catalogue),
+                "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
             }
 
         greeting = _greeting_salutation(user_text)
@@ -355,7 +359,7 @@ class ChatService:
                     "confidence": 1.0,
                     "agent": "intent_classifier",
                 },
-                "enrollment": serialize_enrollment(draft, self.catalogue),
+                "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
             }
 
         enrollment_message = user_text
@@ -494,6 +498,16 @@ class ChatService:
             agent_name = "enrollment_agent"
             attachment = None
             confirmed_now = bool(draft and draft.confirmed_at) and not was_confirmed
+            if confirmed_now and self.enrollment.can_offer_another_course(draft):
+                conversation.pending_followup = POST_CONFIRMATION_ADD_COURSE_FOLLOWUP
+                db.session.add(
+                    AuditEvent(
+                        conversation_id=draft.conversation_id,
+                        actor="system",
+                        action="post_confirmation_add_course_displayed",
+                        detail="Participant was offered the remaining eligible course",
+                    )
+                )
             if draft and draft.confirmed_at:
                 conversation.pending_intake_options = None
         else:
@@ -546,7 +560,7 @@ class ChatService:
                 "confidence": classification.confidence,
                 "agent": agent_name,
             },
-            "enrollment": serialize_enrollment(draft, self.catalogue),
+            "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
         }
         if confirmed_now:
             result["show_invoice_action"] = True
@@ -577,7 +591,7 @@ class ChatService:
                 "confidence": 1.0,
                 "agent": agent_name,
             },
-            "enrollment": serialize_enrollment(draft, self.catalogue),
+            "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
         }
 
     def _invoice_status_reply(self, draft):
@@ -694,7 +708,7 @@ def serialize_message(message):
     return serialized
 
 
-def serialize_enrollment(draft, catalogue=None):
+def serialize_enrollment(draft, catalogue=None, conversation=None):
     if draft is None:
         return {
             "status": None,
@@ -722,7 +736,9 @@ def serialize_enrollment(draft, catalogue=None):
             ),
             "is_demo": bool(draft.intake_is_demo),
         }
-    courses = ordered_courses(draft)
+    # Keep cancelled sibling courses visible in participant history while the
+    # active legacy fields continue to mirror the remaining confirmed course.
+    courses = ordered_courses(draft, include_cancelled=True)
     payload = {
         "status": draft.status,
         "course_id": draft.course_id,
@@ -735,31 +751,67 @@ def serialize_enrollment(draft, catalogue=None):
         ),
         "selected_intake": selected_intake,
     }
-    if len(courses) > 1:
-        payload["courses"] = [
-            {
-                "id": row.id,
-                "position": row.position,
-                "course_id": row.course_id,
-                "course_name": row.course_name,
-                "course_fee": str(row.course_fee),
-                "status": row.status,
-                "selected_intake": (
-                    {
-                        "id": row.intake_id,
-                        "start_date": row.intake_start_date.isoformat(),
-                        "end_date": (
-                            row.intake_end_date or row.intake_start_date
-                        ).isoformat(),
-                        "display_date": display_course_range(row),
-                        "is_demo": bool(row.intake_is_demo),
-                    }
-                    if row.intake_start_date
-                    else None
-                ),
-            }
-            for row in courses
-        ]
+    serialized_courses = [
+        {
+            "id": row.id,
+            "position": row.position,
+            "course_id": row.course_id,
+            "course_name": row.course_name,
+            "course_fee": str(row.course_fee),
+            "status": row.status,
+            "selected_intake": (
+                {
+                    "id": row.intake_id,
+                    "start_date": row.intake_start_date.isoformat(),
+                    "end_date": (
+                        row.intake_end_date or row.intake_start_date
+                    ).isoformat(),
+                    "display_date": display_course_range(row),
+                    "is_demo": bool(row.intake_is_demo),
+                }
+                if row.intake_start_date
+                else None
+            ),
+        }
+        for row in courses
+    ]
+    if (
+        conversation is not None
+        and conversation.pending_action in {
+            "awaiting_course_addition_intake",
+            "awaiting_course_addition_confirmation",
+        }
+        and catalogue is not None
+    ):
+        pending = conversation.pending_change_data or {}
+        pending_course = catalogue.course_for(pending.get("course_id"))
+        if pending_course is not None and pending_course["id"] not in {
+            row.course_id for row in courses
+        }:
+            pending_intake = catalogue.intake_for_id(pending.get("intake_id"))
+            serialized_courses.append(
+                {
+                    "id": f"pending-{pending_course['id']}",
+                    "position": len(courses) + 1,
+                    "course_id": pending_course["id"],
+                    "course_name": pending_course["name"],
+                    "course_fee": str(catalogue.course_fee_for(pending_course)),
+                    "status": "pending_addition",
+                    "selected_intake": (
+                        {
+                            "id": pending_intake["id"],
+                            "start_date": pending_intake["start_date"],
+                            "end_date": pending_intake["end_date"],
+                            "display_date": pending_intake["display_date"],
+                            "is_demo": bool(pending_intake.get("is_demo")),
+                        }
+                        if pending_intake is not None
+                        else None
+                    ),
+                }
+            )
+    if len(serialized_courses) > 1:
+        payload["courses"] = serialized_courses
     return payload
 
 

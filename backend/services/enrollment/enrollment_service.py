@@ -44,6 +44,7 @@ FINAL_STATUSES = {"confirmed", "awaiting_course_date"}
 INTAKE_SELECTION_FOLLOWUP = "intake_selection"
 COURSE_SELECTION_FOLLOWUP = "course_selection"
 COURSE_OPTIONS_KEY = "course_options"
+POST_CONFIRMATION_ADD_COURSE_FOLLOWUP = "post_confirmation_add_course"
 
 
 class EnrollmentService:
@@ -1043,6 +1044,7 @@ class EnrollmentService:
                 f"🧾 Enrollment reference\nReference: {self._friendly_reference(draft)}\n\n"
                 "Our team will contact you once the upcoming intake date and exact "
                 "training venue are confirmed."
+                + self._post_confirmation_course_prompt(draft)
                 + self._confirmed_next_actions()
             )
         if len(courses) > 1:
@@ -1068,7 +1070,11 @@ class EnrollmentService:
                     "to your registered email address.",
                 ]
             )
-            return "\n".join(lines) + self._confirmed_next_actions()
+            return (
+                "\n".join(lines)
+                + "\n\nYou are enrolled in both available courses. Is there anything else I can help you with today?"
+                + self._confirmed_next_actions()
+            )
         intake = self._intake_display(draft)
         selected_intake = self.catalogue.intake_for_id(draft.intake_id) if draft.intake_id else None
         if selected_intake and selected_intake.get("intake_type"):
@@ -1081,7 +1087,25 @@ class EnrollmentService:
             "Your invoice is being prepared and will be emailed to your registered "
             "email address. You can also download it from Enrollment & invoice."
         )
-        return reply + self._confirmed_next_actions()
+        return reply + self._post_confirmation_course_prompt(draft) + self._confirmed_next_actions()
+
+    def can_offer_another_course(self, draft):
+        active_ids = {row.course_id for row in ordered_courses(draft)}
+        if len(active_ids) >= 2:
+            return False
+        return any(
+            course["id"] not in active_ids
+            and bool(self.catalogue.selectable_intakes_for(course["id"]))
+            for course in self.catalogue.courses
+        )
+
+    def _post_confirmation_course_prompt(self, draft):
+        if not self.can_offer_another_course(draft):
+            return ""
+        return (
+            "\n\nIs that all, or would you like to enrol in another course?\n\n"
+            "Reply “Add another course” to view the remaining course, or “That’s all” to finish."
+        )
 
     def _already_confirmed_reply(self, draft):
         if draft.status == "awaiting_course_date":

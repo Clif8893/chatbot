@@ -11,13 +11,14 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from PyPDF2 import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from werkzeug.security import generate_password_hash
 
 from backend.app import create_app
 from backend.extensions import db
-from backend.models import Conversation, EnrollmentDraft, User, utc_now
+from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft, User, utc_now
 from backend.models.communications import OutboundMessage
 from backend.models.finance import FinanceAudit, InvoiceGeneration, MasterInvoiceExport
 from backend.services.invoice_template_service import ExcelUnavailableError
@@ -60,7 +61,11 @@ class FakePdfConverter:
         sheet = workbook[sheet_name]
         snapshot = {
             cell: sheet[cell].value
-            for cell in ("C14", "I14", "C7", "I7", "C22", "H30", "C26", "H36", "H31", "H33")
+            for cell in (
+                "C14", "I14", "C7", "I7", "A22", "A25", "C22", "C25",
+                "F22", "F25", "H22", "H25",
+                "K22", "K25", "H30", "C26", "H36", "H31", "H33",
+            )
         }
         snapshot["_sheetnames"] = tuple(workbook.sheetnames)
         snapshot["_image_count"] = len(sheet._images)
@@ -74,7 +79,14 @@ class FakePdfConverter:
         pdf.drawString(72, 760, f"Invoice {snapshot['C7']}")
         pdf.drawString(72, 740, f"Participant {snapshot['C14']}")
         pdf.drawString(72, 720, f"NRIC {snapshot['I14']}")
-        pdf.drawString(72, 700, f"Course {snapshot['C22']}")
+        multi_course = snapshot["K22"] is not None
+        pdf.drawString(72, 700, f"Course {snapshot['A22'] if multi_course else snapshot['C22']}")
+        if multi_course:
+            pdf.drawString(72, 680, f"Code {snapshot['F22']} Intake {snapshot['H22']} Fee S${snapshot['K22']:.2f}")
+        if multi_course and snapshot["K25"] is not None:
+            pdf.drawString(72, 660, f"Course {snapshot['A25']}")
+            pdf.drawString(72, 640, f"Code {snapshot['F25']} Intake {snapshot['H25']} Fee S${snapshot['K25']:.2f}")
+        pdf.drawString(72, 620, f"Total S${snapshot['H30']:.2f}")
         pdf.save()
 
 
@@ -103,6 +115,41 @@ def invoice_app(tmp_path, fake_ai, *, approved=True):
         ai_service=fake_ai,
     )
     return app
+
+
+def _confirm_two_course_via_chat(client):
+    conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
+    send(client, conversation_id, "I want to enrol")
+    send(client, conversation_id, "both")
+    send(client, conversation_id, "1")
+    send(client, conversation_id, "1")
+    send(
+        client,
+        conversation_id,
+        "Full name: Test Student; NRIC/FIN: S1234567D; "
+        "Date of birth: 15 May 2000; Email: test.student@example.com; "
+        "Mobile number: 91234567",
+    )
+    confirmed = send(client, conversation_id, "Confirm").get_json()
+    assert confirmed["enrollment"]["status"] == "confirmed"
+    return conversation_id
+
+
+def _confirm_one_course_via_chat(client):
+    conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
+    send(client, conversation_id, "I want to enrol")
+    send(client, conversation_id, "1")
+    send(client, conversation_id, "1")
+    send(
+        client,
+        conversation_id,
+        "Full name: Test Student; NRIC/FIN: S1234567D; "
+        "Date of birth: 15 May 2000; Email: test.student@example.com; "
+        "Mobile number: 91234567",
+    )
+    confirmed = send(client, conversation_id, "Confirm").get_json()
+    assert confirmed["enrollment"]["status"] == "confirmed"
+    return conversation_id
 
 
 def confirmed_enrollment(
@@ -244,6 +291,205 @@ def test_idempotency_regeneration_and_failed_regeneration_preserve_valid_pdf(
         assert failed.version == 2
         assert service.document_bytes(failed) == latest_valid
         assert "previous valid PDF was preserved" in failed.failure_reason
+
+
+def test_grouped_cancellation_reuses_invoice_identity_and_replaces_current_version(
+    tmp_path, fake_ai
+):
+    app = invoice_app(tmp_path, fake_ai)
+    converter = FakePdfConverter()
+    app.extensions["invoice_template"].converter = converter
+    client = authenticated_client(app, "group-invoice@example.com")
+    conversation_id = _confirm_two_course_via_chat(client)
+
+    with app.app_context():
+        original = InvoiceGeneration.query.one()
+        original_id = original.id
+        original_number = original.invoice_number
+        assert original.version == 1
+        assert MasterInvoiceExport.query.count() == 1
+        assert converter.calls[-1]["K22"] == 600.0
+        assert converter.calls[-1]["K25"] == 350.0
+        assert converter.calls[-1]["H36"] == "=SUM(K22,K25)"
+
+    send(client, conversation_id, "Cancel course 2")
+    response = send(client, conversation_id, "Confirm cancellation").get_json()
+    assert "existing invoice has been updated" in response["message"]["content"]
+
+    with app.app_context():
+        updated = InvoiceGeneration.query.one()
+        export = MasterInvoiceExport.query.one()
+        assert updated.id == original_id
+        assert updated.invoice_number == original_number == export.invoice_number
+        assert updated.version == 2
+        assert updated.status == "generated"
+        assert MasterInvoiceExport.query.count() == 1
+        assert converter.calls[-1]["C22"] == "2-Day Basic Certificate in Dental Assisting"
+        assert converter.calls[-1]["K25"] is None
+        assert converter.calls[-1]["H30"] == 600.0
+        assert converter.calls[-1]["H36"] == "=H30"
+        assert [row.status for row in EnrollmentCourse.query.order_by(EnrollmentCourse.position)] == [
+            "confirmed",
+            "cancelled",
+        ]
+
+
+def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
+    tmp_path, fake_ai
+):
+    app = invoice_app(tmp_path, fake_ai)
+    converter = FakePdfConverter()
+    app.extensions["invoice_template"].converter = converter
+    client = authenticated_client(app, "add-group-invoice@example.com")
+    conversation_id = _confirm_one_course_via_chat(client)
+
+    with app.app_context():
+        original = InvoiceGeneration.query.one()
+        original_id = original.id
+        original_number = original.invoice_number
+        assert original.version == 1
+
+    send(client, conversation_id, "Add the Infection Control course")
+    summary = send(client, conversation_id, "1").get_json()
+    assert "Combined total: S$950.00" in summary["message"]["content"]
+    send(client, conversation_id, "Confirm change")
+
+    with app.app_context():
+        updated = InvoiceGeneration.query.one()
+        assert updated.id == original_id
+        assert updated.invoice_number == original_number
+        assert updated.version == 2
+        assert updated.status == "generated"
+        assert MasterInvoiceExport.query.count() == 1
+        latest = converter.calls[-1]
+        assert latest["A22"] == "2-Day Basic Certificate in Dental Assisting"
+        assert latest["A25"] == "1-Day Dental Infection Control & Sterilisation Workshop"
+        assert latest["F22"] == "BCDA-2D"
+        assert latest["F25"] == "DICS-1D"
+        assert latest["H22"] == "10–11 October 2026"
+        assert latest["H25"] == "18 October 2026"
+        assert latest["K22"] == 600.0
+        assert latest["K25"] == 350.0
+        assert latest["H30"] == 950.0
+        assert latest["H36"] == "=SUM(K22,K25)"
+        assert latest["H31"] is None
+        assert latest["H33"] is None
+        pdf_text = "\n".join(
+            page.extract_text()
+            for page in PdfReader(BytesIO(app.extensions["invoice_template"].document_bytes(updated))).pages
+        )
+        assert "2-Day Basic Certificate in Dental Assisting" in pdf_text
+        assert "1-Day Dental Infection Control & Sterilisation Workshop" in pdf_text
+        assert "BCDA-2D" in pdf_text and "DICS-1D" in pdf_text
+        assert "10–11 October 2026" in pdf_text and "18 October 2026" in pdf_text
+        assert "S$600.00" in pdf_text and "S$350.00" in pdf_text
+        assert "Total S$950.00" in pdf_text
+        assert "Payment method" not in pdf_text
+
+
+def test_failed_grouped_invoice_refresh_keeps_registration_change_and_valid_pdf(
+    tmp_path, fake_ai
+):
+    app = invoice_app(tmp_path, fake_ai)
+    converter = FakePdfConverter()
+    app.extensions["invoice_template"].converter = converter
+    client = authenticated_client(app, "group-invoice-failure@example.com")
+    conversation_id = _confirm_two_course_via_chat(client)
+
+    with app.app_context():
+        service = app.extensions["invoice_template"]
+        original = InvoiceGeneration.query.one()
+        original_id = original.id
+        original_number = original.invoice_number
+        valid_pdf = service.document_bytes(original)
+        service.converter = FakePdfConverter(failure=RuntimeError("synthetic"))
+
+    send(client, conversation_id, "Cancel course 2")
+    response = send(client, conversation_id, "Confirm cancellation").get_json()
+    assert "staff retry" in response["message"]["content"]
+
+    with app.app_context():
+        service = app.extensions["invoice_template"]
+        failed = InvoiceGeneration.query.one()
+        assert failed.id == original_id
+        assert failed.invoice_number == original_number
+        assert failed.status == "failed"
+        assert failed.version == 1
+        assert service.document_bytes(failed) == valid_pdf
+        assert EnrollmentCourse.query.filter_by(status="cancelled").count() == 1
+        assert EnrollmentDraft.query.one().status == "confirmed"
+
+
+def test_cancelling_first_course_keeps_second_and_revises_same_invoice_to_350(
+    tmp_path, fake_ai
+):
+    app = invoice_app(tmp_path, fake_ai)
+    converter = FakePdfConverter()
+    app.extensions["invoice_template"].converter = converter
+    client = authenticated_client(app, "cancel-first-invoice@example.com")
+    conversation_id = _confirm_two_course_via_chat(client)
+
+    with app.app_context():
+        original = InvoiceGeneration.query.one()
+        original_id = original.id
+        original_number = original.invoice_number
+
+    send(client, conversation_id, "I only want to keep the second course")
+    send(client, conversation_id, "Confirm course cancellation")
+
+    with app.app_context():
+        updated = InvoiceGeneration.query.one()
+        assert updated.id == original_id
+        assert updated.invoice_number == original_number
+        assert updated.version == 2
+        assert converter.calls[-1]["C22"] == "1-Day Dental Infection Control & Sterilisation Workshop"
+        assert converter.calls[-1]["H30"] == 350.0
+        assert converter.calls[-1]["H36"] == "=H30"
+        rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
+        assert [row.status for row in rows] == ["cancelled", "confirmed"]
+
+
+def test_readding_cancelled_course_reuses_same_invoice_and_restores_950_total(
+    tmp_path, fake_ai
+):
+    app = invoice_app(tmp_path, fake_ai)
+    converter = FakePdfConverter()
+    app.extensions["invoice_template"].converter = converter
+    client = authenticated_client(app, "readd-group-invoice@example.com")
+    conversation_id = _confirm_two_course_via_chat(client)
+
+    with app.app_context():
+        original = InvoiceGeneration.query.one()
+        original_id = original.id
+        original_number = original.invoice_number
+        cancelled_child_id = EnrollmentCourse.query.filter_by(
+            course_id="dental-infection-control"
+        ).one().id
+
+    send(client, conversation_id, "Cancel my Infection Control course")
+    send(client, conversation_id, "Confirm course cancellation")
+    send(client, conversation_id, "Add the Infection Control course")
+    send(client, conversation_id, "1")
+    send(client, conversation_id, "Confirm course addition")
+
+    with app.app_context():
+        updated = InvoiceGeneration.query.one()
+        assert updated.id == original_id
+        assert updated.invoice_number == original_number
+        assert updated.version == 3
+        assert MasterInvoiceExport.query.count() == 1
+        latest = converter.calls[-1]
+        assert latest["A22"] == "2-Day Basic Certificate in Dental Assisting"
+        assert latest["A25"] == "1-Day Dental Infection Control & Sterilisation Workshop"
+        assert latest["K22"] == 600.0
+        assert latest["K25"] == 350.0
+        assert latest["H30"] == 950.0
+        assert latest["H36"] == "=SUM(K22,K25)"
+        readded = EnrollmentCourse.query.filter_by(
+            course_id="dental-infection-control"
+        ).one()
+        assert readded.id == cancelled_child_id
+        assert readded.status == "confirmed"
 
 
 @pytest.mark.parametrize(

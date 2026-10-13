@@ -27,15 +27,30 @@ def ordered_courses(registration, *, include_cancelled=False):
     return [row for row in rows if row.status != "cancelled"]
 
 
-def add_course(registration, course, catalogue):
-    """Add a canonical course once, preserving participant-selected order."""
+def add_course(registration, course, catalogue, *, status="collecting"):
+    """Add or safely reactivate one canonical course in its saved position."""
     course_id = course["id"]
     existing = next(
         (row for row in registration.course_enrollments if row.course_id == course_id),
         None,
     )
-    if existing is not None:
+    if existing is not None and existing.status != "cancelled":
         return existing, False
+    if existing is not None:
+        existing.course_name = course["name"]
+        existing.course_fee = catalogue.course_fee_for(course)
+        existing.status = status
+        existing.confirmed_at = None
+        existing.intake_id = None
+        existing.intake_start_date = None
+        existing.intake_end_date = None
+        existing.intake_is_demo = None
+        existing.allocated_intake_id = None
+        existing.intake_allocated_at = None
+        existing.updated_at = datetime.now().astimezone()
+        db.session.flush()
+        sync_registration(registration)
+        return existing, True
     active = ordered_courses(registration)
     if len(active) >= 2:
         raise ValueError("A registration can contain at most two different courses.")
@@ -45,7 +60,7 @@ def add_course(registration, course, catalogue):
         course_id=course_id,
         course_name=course["name"],
         course_fee=catalogue.course_fee_for(course),
-        status="collecting",
+        status=status,
     )
     db.session.add(row)
     db.session.flush()
@@ -87,7 +102,10 @@ def clear_intake(row):
 
 def sync_registration(registration):
     """Mirror the first child into legacy columns and store the grouped total."""
-    rows = ordered_courses(registration)
+    rows = [
+        row for row in ordered_courses(registration)
+        if row.status != "pending_addition"
+    ]
     if not rows:
         registration.course = None
         registration.course_id = None
@@ -125,7 +143,7 @@ def invoice_courses(registration):
     return [
         row
         for row in ordered_courses(registration)
-        if row.status not in {"cancelled", "discarded"}
+        if row.status not in {"cancelled", "discarded", "pending_addition"}
     ]
 
 

@@ -18,6 +18,7 @@ from backend.tests.test_invoice_template_generation import (
     confirmed_enrollment,
     invoice_app,
     _login,
+    _confirm_two_course_via_chat,
 )
 
 
@@ -148,6 +149,65 @@ def test_confirmation_automatically_emails_generated_invoice(tmp_path, fake_ai):
         len(fake_ai.faq_calls),
         len(fake_ai.enrollment_calls),
     )
+
+
+def test_grouped_invoice_revision_emails_exactly_once_per_document_version(
+    tmp_path, fake_ai
+):
+    sent = []
+    app = invoice_app(tmp_path, fake_ai)
+    configure_email(app, sent)
+    app.extensions["invoice_template"].converter = FakePdfConverter()
+    owner = authenticated_client(app, email="group-email@example.com")
+    conversation_id = _confirm_two_course_via_chat(owner)
+    assert len(sent) == 1
+
+    send(owner, conversation_id, "Cancel my Infection Control course")
+    send(owner, conversation_id, "Confirm course cancellation")
+    assert len(sent) == 2
+    send(owner, conversation_id, "Confirm course cancellation")
+    assert len(sent) == 2
+
+    latest = sent[-1]
+    plain = latest.get_body(preferencelist=("plain",)).get_content()
+    assert "2-Day Basic Certificate in Dental Assisting" in plain
+    assert "1-Day Dental Infection Control" not in plain
+    assert "S$600 nett" in plain
+    with app.app_context():
+        deliveries = OutboundMessage.query.filter_by(email_type="invoice").all()
+        assert len(deliveries) == 2
+        assert len({row.idempotency_key for row in deliveries}) == 2
+        assert InvoiceGeneration.query.one().version == 2
+
+
+def test_cancelled_course_readdition_queues_one_email_for_restored_invoice_version(
+    tmp_path, fake_ai
+):
+    sent = []
+    app = invoice_app(tmp_path, fake_ai)
+    configure_email(app, sent)
+    app.extensions["invoice_template"].converter = FakePdfConverter()
+    owner = authenticated_client(app, email="readd-group-email@example.com")
+    conversation_id = _confirm_two_course_via_chat(owner)
+
+    send(owner, conversation_id, "Cancel course 2")
+    send(owner, conversation_id, "Confirm course cancellation")
+    send(owner, conversation_id, "Add the Infection Control course")
+    send(owner, conversation_id, "1")
+    send(owner, conversation_id, "Confirm course addition")
+    assert len(sent) == 3
+
+    send(owner, conversation_id, "Confirm course addition")
+    assert len(sent) == 3
+    plain = sent[-1].get_body(preferencelist=("plain",)).get_content()
+    assert "2-Day Basic Certificate in Dental Assisting" in plain
+    assert "1-Day Dental Infection Control" in plain
+    assert "S$950 nett" in plain
+    with app.app_context():
+        deliveries = OutboundMessage.query.filter_by(email_type="invoice").all()
+        assert len(deliveries) == 3
+        assert len({row.idempotency_key for row in deliveries}) == 3
+        assert InvoiceGeneration.query.one().version == 3
 
 
 def test_message_has_approved_structure_attachment_cid_and_no_sensitive_fields(tmp_path, fake_ai):
