@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from werkzeug.security import generate_password_hash
