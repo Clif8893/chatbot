@@ -353,9 +353,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
       <main className="staff-main">
         <header className="workspace-header">
           <div>
-            <span className="eyebrow">
-              2-Day Basic Certificate in Dental Assisting
-            </span>
+            <span className="eyebrow">Q&amp;M Training course operations</span>
             <h1>{titles[tab]}</h1>
             <p className="muted">{descriptions[tab]}</p>
           </div>

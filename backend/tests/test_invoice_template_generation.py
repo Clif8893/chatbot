@@ -86,7 +86,7 @@ class FakePdfConverter:
         if multi_course and snapshot["K25"] is not None:
             pdf.drawString(72, 660, f"Course {snapshot['A25']}")
             pdf.drawString(72, 640, f"Code {snapshot['F25']} Intake {snapshot['H25']} Fee S${snapshot['K25']:.2f}")
-        pdf.drawString(72, 620, f"Total S${snapshot['H30']:.2f}")
+            pdf.drawString(72, 620, f"Total S${snapshot['H30']:,.2f}")
         pdf.save()
 
 
@@ -309,7 +309,7 @@ def test_grouped_cancellation_reuses_invoice_identity_and_replaces_current_versi
         assert original.version == 1
         assert MasterInvoiceExport.query.count() == 1
         assert converter.calls[-1]["K22"] == 600.0
-        assert converter.calls[-1]["K25"] == 350.0
+        assert converter.calls[-1]["K25"] == 450.0
         assert converter.calls[-1]["H36"] == "=SUM(K22,K25)"
 
     send(client, conversation_id, "Cancel course 2")
@@ -324,7 +324,7 @@ def test_grouped_cancellation_reuses_invoice_identity_and_replaces_current_versi
         assert updated.version == 2
         assert updated.status == "generated"
         assert MasterInvoiceExport.query.count() == 1
-        assert converter.calls[-1]["C22"] == "2-Day Basic Certificate in Dental Assisting"
+        assert converter.calls[-1]["C22"] == "Basic Certificate in Dental Assisting"
         assert converter.calls[-1]["K25"] is None
         assert converter.calls[-1]["H30"] == 600.0
         assert converter.calls[-1]["H36"] == "=H30"
@@ -349,9 +349,9 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
         original_number = original.invoice_number
         assert original.version == 1
 
-    send(client, conversation_id, "Add the Infection Control course")
+    send(client, conversation_id, "Add the Front Desk Operations course")
     summary = send(client, conversation_id, "1").get_json()
-    assert "Combined total: S$950.00" in summary["message"]["content"]
+    assert "Combined total: S$1,050.00" in summary["message"]["content"]
     send(client, conversation_id, "Confirm change")
 
     with app.app_context():
@@ -362,15 +362,15 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
         assert updated.status == "generated"
         assert MasterInvoiceExport.query.count() == 1
         latest = converter.calls[-1]
-        assert latest["A22"] == "2-Day Basic Certificate in Dental Assisting"
-        assert latest["A25"] == "1-Day Dental Infection Control & Sterilisation Workshop"
-        assert latest["F22"] == "BCDA-2D"
-        assert latest["F25"] == "DICS-1D"
-        assert latest["H22"] == "10–11 October 2026"
-        assert latest["H25"] == "18 October 2026"
+        assert latest["A22"] == "Basic Certificate in Dental Assisting"
+        assert latest["A25"] == "Certificate in Dental Clinic Front Desk Operations"
+        assert latest["F22"] == "—"
+        assert latest["F25"] == "—"
+        assert latest["H22"] == "18–19 November 2026"
+        assert latest["H25"] == "2 December 2026"
         assert latest["K22"] == 600.0
-        assert latest["K25"] == 350.0
-        assert latest["H30"] == 950.0
+        assert latest["K25"] == 450.0
+        assert latest["H30"] == 1050.0
         assert latest["H36"] == "=SUM(K22,K25)"
         assert latest["H31"] is None
         assert latest["H33"] is None
@@ -378,12 +378,12 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
             page.extract_text()
             for page in PdfReader(BytesIO(app.extensions["invoice_template"].document_bytes(updated))).pages
         )
-        assert "2-Day Basic Certificate in Dental Assisting" in pdf_text
-        assert "1-Day Dental Infection Control & Sterilisation Workshop" in pdf_text
-        assert "BCDA-2D" in pdf_text and "DICS-1D" in pdf_text
-        assert "10–11 October 2026" in pdf_text and "18 October 2026" in pdf_text
-        assert "S$600.00" in pdf_text and "S$350.00" in pdf_text
-        assert "Total S$950.00" in pdf_text
+        assert "Basic Certificate in Dental Assisting" in pdf_text
+        assert "Certificate in Dental Clinic Front Desk Operations" in pdf_text
+        assert "—" in pdf_text
+        assert "18–19 November 2026" in pdf_text and "2 December 2026" in pdf_text
+        assert "S$600.00" in pdf_text and "S$450.00" in pdf_text
+        assert "Total S$1,050.00" in pdf_text
         assert "Payment method" not in pdf_text
 
 
@@ -442,8 +442,8 @@ def test_cancelling_first_course_keeps_second_and_revises_same_invoice_to_350(
         assert updated.id == original_id
         assert updated.invoice_number == original_number
         assert updated.version == 2
-        assert converter.calls[-1]["C22"] == "1-Day Dental Infection Control & Sterilisation Workshop"
-        assert converter.calls[-1]["H30"] == 350.0
+        assert converter.calls[-1]["C22"] == "Certificate in Dental Clinic Front Desk Operations"
+        assert converter.calls[-1]["H30"] == 450.0
         assert converter.calls[-1]["H36"] == "=H30"
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
         assert [row.status for row in rows] == ["cancelled", "confirmed"]
@@ -463,12 +463,12 @@ def test_readding_cancelled_course_reuses_same_invoice_and_restores_950_total(
         original_id = original.id
         original_number = original.invoice_number
         cancelled_child_id = EnrollmentCourse.query.filter_by(
-            course_id="dental-infection-control"
+            course_id="dental-clinic-front-desk-operations"
         ).one().id
 
-    send(client, conversation_id, "Cancel my Infection Control course")
+    send(client, conversation_id, "Cancel my Front Desk Operations course")
     send(client, conversation_id, "Confirm course cancellation")
-    send(client, conversation_id, "Add the Infection Control course")
+    send(client, conversation_id, "Add the Front Desk Operations course")
     send(client, conversation_id, "1")
     send(client, conversation_id, "Confirm course addition")
 
@@ -479,14 +479,14 @@ def test_readding_cancelled_course_reuses_same_invoice_and_restores_950_total(
         assert updated.version == 3
         assert MasterInvoiceExport.query.count() == 1
         latest = converter.calls[-1]
-        assert latest["A22"] == "2-Day Basic Certificate in Dental Assisting"
-        assert latest["A25"] == "1-Day Dental Infection Control & Sterilisation Workshop"
+        assert latest["A22"] == "Basic Certificate in Dental Assisting"
+        assert latest["A25"] == "Certificate in Dental Clinic Front Desk Operations"
         assert latest["K22"] == 600.0
-        assert latest["K25"] == 350.0
-        assert latest["H30"] == 950.0
+        assert latest["K25"] == 450.0
+        assert latest["H30"] == 1050.0
         assert latest["H36"] == "=SUM(K22,K25)"
         readded = EnrollmentCourse.query.filter_by(
-            course_id="dental-infection-control"
+            course_id="dental-clinic-front-desk-operations"
         ).one()
         assert readded.id == cancelled_child_id
         assert readded.status == "confirmed"

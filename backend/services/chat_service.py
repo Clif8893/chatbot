@@ -100,6 +100,18 @@ class ChatService:
                     agent_name="enrollment_agent",
                 )
 
+        retired_reply = self.enrollment.redirect_retired_draft(conversation, draft)
+        if retired_reply is not None:
+            conversation.active_intent = "enrollment"
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                retired_reply,
+                intent="enrollment",
+                agent_name="enrollment_agent",
+            )
+
         course_fact_topic = _course_fact_topic(user_text)
         enrollment_progress_request = bool(
             draft is not None
@@ -150,8 +162,7 @@ class ChatService:
                 intent="faq", agent_name="faq_agent",
             )
         if (
-            "infection" in user_text.casefold()
-            and "control" in user_text.casefold()
+            "front desk" in user_text.casefold()
             and not is_course_change_request(user_text)
             and not self.enrollment.is_waiting_for_course(conversation)
             and not any(
@@ -164,7 +175,9 @@ class ChatService:
                 conversation,
                 user_message,
                 draft,
-                self.catalogue.course_overview_reply("dental-infection-control"),
+                self.catalogue.course_overview_reply(
+                    "dental-clinic-front-desk-operations"
+                ),
                 intent="faq",
                 agent_name="faq_agent",
             )

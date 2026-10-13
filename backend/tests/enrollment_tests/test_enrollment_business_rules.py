@@ -133,32 +133,38 @@ def test_seeded_intakes_are_database_backed_complete_and_idempotent(tmp_path, fa
     with app.app_context():
         rows = CourseDate.query.order_by(CourseDate.date).all()
         assert [row.id for row in rows] == [
-            "demo-2026-10-10",
-            "infection-control-2026-10-18",
-            "demo-2026-11-04",
-            "infection-control-2026-11-15",
-            "demo-2026-11-21",
+            "dental-assisting-2026-11-18",
+            "dental-assisting-2026-11-28",
+            "front-desk-operations-2026-12-02",
+            "dental-assisting-2026-12-16",
+            "front-desk-operations-2027-01-09",
+            "front-desk-operations-2027-02-03",
         ]
         assert {row.course_id for row in rows} == {
-            "dental-assisting-basic", "dental-infection-control"
+            "dental-assisting-basic", "dental-clinic-front-desk-operations"
         }
-        assert all(row.start_time.strftime("%H:%M") == "09:30" for row in rows)
-        assert all(row.end_time.strftime("%H:%M") == "17:30" for row in rows)
+        dental_rows = [row for row in rows if row.course_id == "dental-assisting-basic"]
+        front_desk_rows = [row for row in rows if row.course_id == "dental-clinic-front-desk-operations"]
+        assert all(row.start_time.strftime("%H:%M") == "09:30" for row in dental_rows)
+        assert all(row.end_time.strftime("%H:%M") == "17:30" for row in dental_rows)
+        assert all(row.start_time.strftime("%H:%M") == "00:00" for row in front_desk_rows)
+        assert all(row.end_time.strftime("%H:%M") == "00:00" for row in front_desk_rows)
+        assert all(row.date == row.end_date for row in front_desk_rows)
         assert all(row.capacity == 20 and row.participant_count == 0 for row in rows)
-        assert all(row.status == "open" and row.is_demo for row in rows)
+        assert all(row.status == "open" and not row.is_demo for row in rows)
     restarted = business_app(tmp_path, fake_ai, database_name)
     with restarted.app_context():
-        assert CourseDate.query.count() == 5
+        assert CourseDate.query.count() == 6
 
 
 @pytest.mark.parametrize(
     ("selection", "expected_id"),
     [
-        ("1", "demo-2026-10-10"),
-        ("first intake", "demo-2026-10-10"),
-        ("10 October", "demo-2026-10-10"),
-        ("10–11 October", "demo-2026-10-10"),
-        ("weekend intake on 21 November", "demo-2026-11-21"),
+        ("1", "dental-assisting-2026-11-18"),
+        ("first intake", "dental-assisting-2026-11-18"),
+        ("18 November", "dental-assisting-2026-11-18"),
+        ("18–19 November", "dental-assisting-2026-11-18"),
+        ("weekend intake on 28 November", "dental-assisting-2026-11-28"),
     ],
 )
 def test_natural_intake_selection_uses_database_records(tmp_path, fake_ai, selection, expected_id):
@@ -168,20 +174,19 @@ def test_natural_intake_selection_uses_database_records(tmp_path, fake_ai, selec
     offered = send(
         client, conversation_id, "I want to enroll in Dental Assisting"
     ).get_json()
-    assert "10–11 October 2026 — Weekend" in offered["message"]["content"]
+    assert "18–19 November 2026 — Weekdays" in offered["message"]["content"]
     response = send(client, conversation_id, selection).get_json()
     assert response["enrollment"]["selected_intake"]["id"] == expected_id
     assert "Selected Intake" in response["message"]["content"]
 
 
-def test_ambiguous_weekend_intake_requires_clarification(tmp_path, fake_ai):
+def test_unique_weekend_intake_resolves_without_clarification(tmp_path, fake_ai):
     app = business_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     send(client, conversation_id, "I want to enroll in Dental Assisting")
     response = send(client, conversation_id, "weekend intake").get_json()
-    assert "more than one intake" in response["message"]["content"]
-    assert response["enrollment"]["selected_intake"] is None
+    assert response["enrollment"]["selected_intake"]["id"] == "dental-assisting-2026-11-28"
 
 
 @pytest.mark.parametrize(
@@ -191,7 +196,7 @@ def test_ambiguous_weekend_intake_requires_clarification(tmp_path, fake_ai):
 def test_unavailable_intakes_cannot_be_selected(tmp_path, fake_ai, status, expected):
     app = business_app(tmp_path, fake_ai, f"{status}.db")
     with app.app_context():
-        row = db.session.get(CourseDate, "demo-2026-10-10")
+        row = db.session.get(CourseDate, "dental-assisting-2026-11-18")
         if status == "full":
             row.participant_count = row.capacity
         else:
@@ -200,7 +205,7 @@ def test_unavailable_intakes_cannot_be_selected(tmp_path, fake_ai, status, expec
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     send(client, conversation_id, "I want to enroll in Dental Assisting")
-    response = send(client, conversation_id, "10 October 2026").get_json()
+    response = send(client, conversation_id, "18 November 2026").get_json()
     assert expected in response["message"]["content"].casefold()
     assert response["enrollment"]["selected_intake"] is None
 
@@ -229,17 +234,17 @@ def test_confirmation_allocates_once_and_cancellation_releases_place(tmp_path, f
     send(client, conversation_id, "Confirm")
     send(client, conversation_id, "Confirm")
     with app.app_context():
-        row = db.session.get(CourseDate, "demo-2026-10-10")
+        row = db.session.get(CourseDate, "dental-assisting-2026-11-18")
         draft = EnrollmentDraft.query.one()
         assert row.participant_count == 1
         assert draft.allocated_intake_id == row.id
     requested = send(client, conversation_id, "Cancel").get_json()
     assert "Confirm cancellation" in requested["message"]["content"]
     with app.app_context():
-        assert db.session.get(CourseDate, "demo-2026-10-10").participant_count == 1
+        assert db.session.get(CourseDate, "dental-assisting-2026-11-18").participant_count == 1
     send(client, conversation_id, "Confirm cancellation")
     with app.app_context():
-        row = db.session.get(CourseDate, "demo-2026-10-10")
+        row = db.session.get(CourseDate, "dental-assisting-2026-11-18")
         assert row.participant_count == 0
 
 
@@ -250,12 +255,12 @@ def test_confirmed_intake_change_moves_exactly_one_place(tmp_path, fake_ai):
     _ready_for_confirmation(client, conversation_id)
     send(client, conversation_id, "Confirm")
     changed = send(client, conversation_id, "Change my intake to the third option").get_json()
-    assert changed["enrollment"]["selected_intake"]["id"] == "demo-2026-10-10"
+    assert changed["enrollment"]["selected_intake"]["id"] == "dental-assisting-2026-11-18"
     assert "Confirm reschedule" in changed["message"]["content"]
     send(client, conversation_id, "Confirm reschedule")
     with app.app_context():
-        first = db.session.get(CourseDate, "demo-2026-10-10")
-        third = db.session.get(CourseDate, "demo-2026-11-21")
+        first = db.session.get(CourseDate, "dental-assisting-2026-11-18")
+        third = db.session.get(CourseDate, "dental-assisting-2026-12-16")
         draft = EnrollmentDraft.query.one()
         assert first.participant_count == 0
         assert third.participant_count == 1
@@ -278,7 +283,7 @@ def test_selected_intake_and_validation_state_survive_restart_and_login(tmp_path
         json={"email": client.test_email, "password": client.test_password},
     ).status_code == 200
     history = resumed.get(f"/api/conversations/{conversation_id}/messages").get_json()
-    assert history["enrollment"]["selected_intake"]["id"] == "demo-2026-11-04"
+    assert history["enrollment"]["selected_intake"]["id"] == "dental-assisting-2026-11-28"
     with restarted.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.validation_status == "incomplete"
@@ -288,7 +293,7 @@ def test_selected_intake_and_validation_state_survive_restart_and_login(tmp_path
 def test_atomic_capacity_guard_prevents_second_allocation(tmp_path, fake_ai):
     app = business_app(tmp_path, fake_ai)
     with app.app_context():
-        intake = db.session.get(CourseDate, "demo-2026-10-10")
+        intake = db.session.get(CourseDate, "dental-assisting-2026-11-18")
         intake.capacity = 1
         first_conversation = Conversation()
         second_conversation = Conversation()

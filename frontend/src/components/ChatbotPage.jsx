@@ -8,7 +8,7 @@ import { createConversation, getConversationMessages, listConversations, sendCha
 const welcomeMessage = {
   id: "welcome-message",
   sender: "bot",
-  text: "Hi there! 👋 I’m the Q&M Training Assistant. I can answer questions about our 2-Day Basic Certificate in Dental Assisting or guide you through enrollment. How can I help you today?",
+  text: "Hi there! 👋 I’m the Q&M Training Assistant. I can help with the Basic Certificate in Dental Assisting and the Certificate in Dental Clinic Front Desk Operations, or guide you through enrollment. How can I help you today?",
   timestamp: new Date().toISOString(),
 };
 

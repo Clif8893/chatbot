@@ -11,7 +11,7 @@ from backend.models import Conversation, EnrollmentDraft
 from backend.tests.conftest import authenticated_client, send
 
 
-COURSE = "2-Day Basic Certificate in Dental Assisting"
+COURSE = "Basic Certificate in Dental Assisting"
 OLD_NRIC = "S1234567D"
 
 
@@ -34,10 +34,10 @@ def add_active_draft(app, conversation_id, **overrides):
         "course": COURSE,
         "course_fee": Decimal("600"),
         "email": "test.student@example.com",
-        "intake_id": "demo-2026-11-21",
-        "preferred_intake_date": date(2026, 11, 21),
-        "intake_start_date": date(2026, 11, 21),
-        "intake_end_date": date(2026, 11, 22),
+        "intake_id": "dental-assisting-2026-12-16",
+        "preferred_intake_date": date(2026, 12, 16),
+        "intake_start_date": date(2026, 12, 16),
+        "intake_end_date": date(2026, 12, 17),
         "intake_is_demo": True,
         "status": "collecting",
     }
@@ -72,9 +72,9 @@ def test_discard_archives_draft_clears_state_and_restart_is_fresh(tmp_path, fake
         conversation = db.session.get(Conversation, conversation_id)
         conversation.pending_followup = "intake_selection"
         conversation.pending_intake_options = [
-            "demo-2026-10-10",
-            "demo-2026-11-04",
-            "demo-2026-11-21",
+            "dental-assisting-2026-11-18",
+            "dental-assisting-2026-11-28",
+            "dental-assisting-2026-12-16",
         ]
         db.session.commit()
 
@@ -282,18 +282,18 @@ def test_intake_change_uses_persisted_displayed_choices(tmp_path, fake_ai):
 
     with app.app_context():
         conversation = db.session.get(Conversation, conversation_id)
-        assert conversation.enrollment_draft.intake_id == "demo-2026-11-21"
+        assert conversation.enrollment_draft.intake_id == "dental-assisting-2026-11-28"
         assert conversation.pending_intake_options == [
-            "demo-2026-10-10",
-            "demo-2026-11-04",
-            "demo-2026-11-21",
+            "dental-assisting-2026-11-18",
+            "dental-assisting-2026-11-28",
+            "dental-assisting-2026-12-16",
         ]
 
     send(client, conversation_id, "Actually use the second one")
     with app.app_context():
         draft = db.session.get(Conversation, conversation_id).enrollment_draft
-        assert draft.intake_id == "demo-2026-11-04"
-        assert draft.preferred_intake_date == date(2026, 11, 4)
+        assert draft.intake_id == "dental-assisting-2026-11-28"
+        assert draft.preferred_intake_date == date(2026, 11, 28)
 
 
 def test_ambiguous_fallback_receives_masked_scoped_context(tmp_path, fake_ai):

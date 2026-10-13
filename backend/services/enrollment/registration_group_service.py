@@ -24,7 +24,11 @@ def ordered_courses(registration, *, include_cancelled=False):
     rows = sorted(registration.course_enrollments, key=lambda row: (row.position, row.id))
     if include_cancelled:
         return rows
-    return [row for row in rows if row.status != "cancelled"]
+    return [
+        row
+        for row in rows
+        if row.status not in {"cancelled", "retired_unavailable"}
+    ]
 
 
 def add_course(registration, course, catalogue, *, status="collecting"):

@@ -162,7 +162,7 @@ def test_grouped_invoice_revision_emails_exactly_once_per_document_version(
     conversation_id = _confirm_two_course_via_chat(owner)
     assert len(sent) == 1
 
-    send(owner, conversation_id, "Cancel my Infection Control course")
+    send(owner, conversation_id, "Cancel my Front Desk Operations course")
     send(owner, conversation_id, "Confirm course cancellation")
     assert len(sent) == 2
     send(owner, conversation_id, "Confirm course cancellation")
@@ -170,8 +170,8 @@ def test_grouped_invoice_revision_emails_exactly_once_per_document_version(
 
     latest = sent[-1]
     plain = latest.get_body(preferencelist=("plain",)).get_content()
-    assert "2-Day Basic Certificate in Dental Assisting" in plain
-    assert "1-Day Dental Infection Control" not in plain
+    assert "Basic Certificate in Dental Assisting" in plain
+    assert "Certificate in Dental Clinic Front Desk Operations" not in plain
     assert "S$600 nett" in plain
     with app.app_context():
         deliveries = OutboundMessage.query.filter_by(email_type="invoice").all()
@@ -192,7 +192,7 @@ def test_cancelled_course_readdition_queues_one_email_for_restored_invoice_versi
 
     send(owner, conversation_id, "Cancel course 2")
     send(owner, conversation_id, "Confirm course cancellation")
-    send(owner, conversation_id, "Add the Infection Control course")
+    send(owner, conversation_id, "Add the Front Desk Operations course")
     send(owner, conversation_id, "1")
     send(owner, conversation_id, "Confirm course addition")
     assert len(sent) == 3
@@ -200,9 +200,9 @@ def test_cancelled_course_readdition_queues_one_email_for_restored_invoice_versi
     send(owner, conversation_id, "Confirm course addition")
     assert len(sent) == 3
     plain = sent[-1].get_body(preferencelist=("plain",)).get_content()
-    assert "2-Day Basic Certificate in Dental Assisting" in plain
-    assert "1-Day Dental Infection Control" in plain
-    assert "S$950 nett" in plain
+    assert "Basic Certificate in Dental Assisting" in plain
+    assert "Certificate in Dental Clinic Front Desk Operations" in plain
+    assert "S$1,050 nett" in plain
     with app.app_context():
         deliveries = OutboundMessage.query.filter_by(email_type="invoice").all()
         assert len(deliveries) == 3
@@ -228,7 +228,7 @@ def test_message_has_approved_structure_attachment_cid_and_no_sensitive_fields(t
     assert message["Subject"] == "Q&M Training – Invoice DEMO-INV-2027-000001"
     plain = message.get_body(preferencelist=("plain",)).get_content()
     html = message.get_body(preferencelist=("html",)).get_content()
-    assert "2-Day Basic Certificate in Dental Assisting" in plain
+    assert "Basic Certificate in Dental Assisting" in plain
     assert "8–9 February 2027" in plain
     assert "S$600 nett" in plain
     assert "Development demonstration only" not in plain

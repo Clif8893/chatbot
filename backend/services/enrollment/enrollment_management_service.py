@@ -1084,7 +1084,7 @@ class EnrollmentManagementService:
             "Please review the updated two-course registration:\n\n"
             f"1. {active[0].course_name} — {display_course_range(active[0])} — S${existing_fee:.2f}\n"
             f"2. {course['name']} — {self._row_display(target)} — S${new_fee:.2f}\n\n"
-            f"Combined total: S${existing_fee + new_fee:.2f}\n\n"
+            f"Combined total: S${existing_fee + new_fee:,.2f}\n\n"
             "Your first course remains confirmed. Reply “Confirm change” to add the second course, "
             "or “Keep enrollment” to make no change.",
             draft,
@@ -1281,8 +1281,10 @@ class EnrollmentManagementService:
         if draft.confirmed_at and draft.status in ACTIVE_STATUSES:
             if len(grouped) <= 1:
                 lines.append(f"- Intake: {self._intake_display(draft)}")
-            course = self.catalogue.course_for(draft.course) or self.catalogue.course
-            lines.append(f"- Time: {course.get('training_time', '9:30am–5:30pm')}")
+            course = self.catalogue.course_for(draft.course_id or draft.course)
+            lines.append(
+                f"- Time: {(course or {}).get('training_time') or 'Staff confirmation is required'}"
+            )
             if draft.friendly_reference:
                 lines.append(f"- Reference: {draft.friendly_reference}")
             export = MasterInvoiceExport.query.filter_by(enrollment_id=draft.id).one_or_none()
@@ -1451,7 +1453,19 @@ class EnrollmentManagementService:
     @staticmethod
     def _training_time(context, course):
         intake = context.intake if context else None
-        if intake is not None and intake.start_time and intake.end_time:
+        if (
+            intake is not None
+            and intake.start_time
+            and intake.end_time
+            and any(
+                (
+                    intake.start_time.hour,
+                    intake.start_time.minute,
+                    intake.end_time.hour,
+                    intake.end_time.minute,
+                )
+            )
+        ):
             def display(value):
                 hour = value.hour % 12 or 12
                 suffix = "am" if value.hour < 12 else "pm"
@@ -1957,7 +1971,7 @@ class EnrollmentManagementService:
             + "Please confirm this intake change:\n\n"
             + f"- Current intake: {self._intake_display(draft)}\n"
             + f"- New intake: {self._row_display(target)}\n"
-            + f"- Time: {(self.catalogue.course_for(draft.course) or self.catalogue.course).get('training_time', '9:30am–5:30pm')}\n"
+            + f"- Time: {(self.catalogue.course_for(draft.course_id or draft.course) or {}).get('training_time') or 'Staff confirmation is required'}\n"
             + "- Availability: Open\n\n"
             + "Reply “Confirm reschedule” to continue, or “Keep current intake” to cancel this change.",
             draft,
@@ -2293,7 +2307,7 @@ def is_cancellation_request(message):
             r"^cancel$",
             r"\bcancel (?:my )?(?:enrolment|enrollment|registration|course|intake)\b",
             r"\bcancel (?:my )?.*\bcourse\b",
-            r"\bcancel (?:my )?.*\b(?:dental assist\w*|infection control|sterilisation)\b",
+            r"\bcancel (?:my )?.*\b(?:dental assist\w*|front desk|infection control|sterilisation)\b",
             r"\bcancel (?:my )?.*\bintake\b",
             r"\bwithdraw\b",
             r"\bremove me from (?:the )?course\b",
@@ -2323,7 +2337,7 @@ def is_course_addition_request(message):
         and (
             "other course" in text
             or "second course" in text
-            or "infection control" in text
+            or "front desk" in text
             or "dental assist" in text
         )
     )

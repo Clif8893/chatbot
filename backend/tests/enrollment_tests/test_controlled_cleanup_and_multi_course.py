@@ -35,13 +35,13 @@ def test_course_choice_and_infection_control_rules(tmp_path, fake_ai):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
 
     opening = send(client, conversation_id, "I want to enrol").get_json()["message"]["content"]
-    assert "1. 2-Day Basic Certificate" in opening
-    assert "2. 1-Day Dental Infection Control" in opening
+    assert "1. Basic Certificate" in opening
+    assert "2. Certificate in Dental Clinic Front Desk Operations" in opening
 
     selected = send(client, conversation_id, "2").get_json()["message"]["content"]
-    assert "18 October 2026" in selected
-    assert "15 November 2026" in selected
-    assert "10–11 October 2026" not in selected
+    assert "2 December 2026" in selected
+    assert "9 January 2027" in selected
+    assert "18–19 November 2026" not in selected
     assert not any(word in selected.casefold() for word in ("prototype", "testing note", "fictional"))
     assert not any(word in selected.casefold() for word in ("paynow", "skillsfuture", "utap"))
 
@@ -50,18 +50,18 @@ def test_course_choice_and_infection_control_rules(tmp_path, fake_ai):
         client,
         conversation_id,
         "Full name: Test Student; NRIC/FIN: S1234567D; Date of birth: 15 May 2000; "
-        "Email: test.student@example.com; Mobile number: 91234567; PayNow S$350",
+        "Email: test.student@example.com; Mobile number: 91234567; PayNow S$450",
     ).get_json()
     assert ready["enrollment"]["status"] == "awaiting_confirmation"
-    assert "S$350.00" in ready["message"]["content"] or "S$350 nett" in ready["message"]["content"]
+    assert "S$450.00" in ready["message"]["content"] or "S$450 nett" in ready["message"]["content"]
 
     confirmed = send(client, conversation_id, "Confirm").get_json()
     assert confirmed["enrollment"]["status"] == "confirmed"
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.friendly_reference.startswith("ENR-2026-")
-        assert draft.course == "1-Day Dental Infection Control & Sterilisation Workshop"
-        assert draft.course_fee == Decimal("350.00")
+        assert draft.course == "Certificate in Dental Clinic Front Desk Operations"
+        assert draft.course_fee == Decimal("450.00")
         assert draft.payment_method is None
         assert draft.skillsfuture_amount is None
         assert draft.paynow_amount is None
@@ -72,8 +72,8 @@ def test_infection_control_payment_preference_is_not_collected(tmp_path, fake_ai
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     send(client, conversation_id, "I want to enrol")
-    send(client, conversation_id, "infection control workshop")
-    send(client, conversation_id, "18 October 2026")
+    send(client, conversation_id, "front desk operations course")
+    send(client, conversation_id, "2 December 2026")
     reply = send(client, conversation_id, "I want to use SkillsFuture").get_json()["message"]["content"]
     assert "Payment method" not in reply
     assert "SkillsFuture amount" not in reply
@@ -94,7 +94,7 @@ def test_cleanup_is_guarded_backed_up_and_preserves_accounts_and_courses(tmp_pat
         conversation = Conversation(user=user)
         draft = EnrollmentDraft(
             conversation=conversation,
-            course="2-Day Basic Certificate in Dental Assisting",
+            course="Basic Certificate in Dental Assisting",
             course_fee=Decimal("600.00"),
             status="confirmed",
             confirmed_at=utc_now(),

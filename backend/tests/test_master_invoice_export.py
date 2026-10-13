@@ -57,7 +57,7 @@ def add_draft(
     with app.app_context():
         draft = EnrollmentDraft(
             conversation_id=conversation_id,
-            course="2-Day Basic Certificate in Dental Assisting",
+            course="Basic Certificate in Dental Assisting",
             course_fee=Decimal("600"),
             full_name=name,
             nric="S1234567D",
@@ -148,7 +148,7 @@ def test_confirmed_rows_are_idempotent_formatted_and_rebuilt(tmp_path, fake_ai):
     assert sheet[2][18].value == 200
     assert sheet[2][19].value == 600
     assert sheet[2][1].value.startswith("DEMO-INV-")
-    assert sheet[2][2].value == "BCDA-2D"
+    assert sheet[2][2].value is None
     assert sheet[2][9].value is not None
 
     service.workbook_path.unlink()
@@ -309,18 +309,18 @@ def test_selected_intake_and_excel_date_cells_export_correctly(tmp_path, fake_ai
         app,
         participant,
         intake=(
-            "test-intake-2026-10-10",
-            date(2026, 10, 10),
-            date(2026, 10, 11),
-            "Weekend",
+            "dental-assisting-2026-11-18",
+            date(2026, 11, 18),
+            date(2026, 11, 19),
+            "Weekdays",
         ),
     )
     with app.app_context():
         service = app.extensions["master_invoice"]
         assert service.export_confirmed_enrollment(enrollment_id)
     sheet = load_workbook(service.workbook_path)[SHEET_NAME]
-    assert sheet.cell(2, 5).value.date() == date(2026, 10, 10)
-    assert sheet.cell(2, 6).value.date() == date(2026, 10, 11)
+    assert sheet.cell(2, 5).value.date() == date(2026, 11, 18)
+    assert sheet.cell(2, 6).value.date() == date(2026, 11, 19)
     assert sheet.cell(2, 10).value.date() <= date.today()
     assert sheet.cell(2, 15).value.date() == date(2000, 5, 15)
     for column in (5, 6, 10, 15):
@@ -358,21 +358,12 @@ def test_correction_and_intake_assignment_update_the_existing_row(tmp_path, fake
         invoice_number = record.invoice_number
         draft = db.session.get(EnrollmentDraft, enrollment_id)
         draft.full_name = "Corrected Student"
-        intake = CourseDate(
-            id="assigned-intake",
-            date=date(2026, 11, 4),
-            end_date=date(2026, 11, 5),
-            label="Weekday",
-            capacity=20,
-            status="open",
-            is_demo=True,
-        )
-        db.session.add(intake)
+        intake = db.session.get(CourseDate, "dental-assisting-2026-11-28")
         draft.intake_id = intake.id
         draft.preferred_intake_date = intake.date
         draft.intake_start_date = intake.date
         draft.intake_end_date = intake.end_date
-        draft.intake_is_demo = True
+        draft.intake_is_demo = False
         draft.status = "confirmed"
         db.session.commit()
         assert service.update_exported_enrollment(enrollment_id, "staff")
@@ -382,7 +373,7 @@ def test_correction_and_intake_assignment_update_the_existing_row(tmp_path, fake
     sheet = load_workbook(service.workbook_path)[SHEET_NAME]
     assert sheet.max_row == 2
     assert sheet.cell(2, 7).value == "Corrected Student"
-    assert sheet.cell(2, 5).value.date() == date(2026, 11, 4)
+    assert sheet.cell(2, 5).value.date() == date(2026, 11, 28)
 
 
 def test_duplicate_names_use_separate_enrollment_ids(tmp_path, fake_ai):

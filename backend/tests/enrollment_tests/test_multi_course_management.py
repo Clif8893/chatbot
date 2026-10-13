@@ -122,7 +122,7 @@ def test_add_second_course_is_staged_without_unconfirming_first_and_updates_same
 
     summary = send(client, conversation_id, "1").get_json()
     assert "updated two-course registration" in summary["message"]["content"]
-    assert "Combined total: S$950.00" in summary["message"]["content"]
+    assert "Combined total: S$1,050.00" in summary["message"]["content"]
     assert [row["status"] for row in summary["enrollment"]["courses"]] == [
         "confirmed",
         "pending_addition",
@@ -172,7 +172,7 @@ def test_new_chat_does_not_duplicate_already_held_course_and_can_add_other(
         assert EnrollmentCourse.query.count() == 1
 
     addition = send(
-        client, new_conversation, "I want to enrol in Infection Control"
+        client, new_conversation, "I want to enrol in Front Desk Operations"
     ).get_json()
     assert "Choose an intake" in addition["message"]["content"]
     with app.app_context():
@@ -233,13 +233,13 @@ def test_unavailable_second_course_intake_leaves_first_course_unchanged(
     app = _app(tmp_path, fake_ai)
     client = authenticated_client(app, "unavailable-add@example.com")
     conversation_id = _confirm_one(client)
-    send(client, conversation_id, "Add the Infection Control course")
+    send(client, conversation_id, "Add the Front Desk Operations course")
     send(client, conversation_id, "1")
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         first_id = draft.course_enrollments[0].id
         original_allocation = draft.course_enrollments[0].allocated_intake_id
-        target = db.session.get(CourseDate, "infection-control-2026-10-18")
+        target = db.session.get(CourseDate, "front-desk-operations-2026-12-02")
         target.participant_count = target.capacity
         db.session.commit()
 
@@ -331,17 +331,17 @@ def test_pending_second_course_survives_refresh_login_and_restart(
     ("message", "expected_course_id"),
     (
         (
-            "Cancel 2-Day Basic Certificate in Dental Assisting",
+            "Cancel Basic Certificate in Dental Assisting",
             "dental-assisting-basic",
         ),
         (
-            "Cancel 1-Day Dental Infection Control & Sterilisation Workshop",
-            "dental-infection-control",
+            "Cancel Certificate in Dental Clinic Front Desk Operations",
+            "dental-clinic-front-desk-operations",
         ),
         ("Cancel Dental Assisting", "dental-assisting-basic"),
-        ("Deregister me from Infection Control", "dental-infection-control"),
+        ("Deregister me from Front Desk Operations", "dental-clinic-front-desk-operations"),
         ("Remove course 1", "dental-assisting-basic"),
-        ("Drop the second course", "dental-infection-control"),
+        ("Drop the second course", "dental-clinic-front-desk-operations"),
     ),
 )
 def test_cancellation_course_names_route_before_course_selection_and_ignore_duration_digits(
@@ -369,7 +369,7 @@ def test_cancellation_course_names_route_before_course_selection_and_ignore_dura
 
 @pytest.mark.parametrize(
     ("choice", "expected_course_id"),
-    (("1", "dental-assisting-basic"), ("2", "dental-infection-control")),
+    (("1", "dental-assisting-basic"), ("2", "dental-clinic-front-desk-operations")),
 )
 def test_pending_cancellation_number_is_locked_to_displayed_child_list(
     tmp_path, fake_ai, choice, expected_course_id
@@ -473,7 +473,7 @@ def test_generic_yes_adds_other_course_only_for_post_confirmation_followup(
 
     offered = send(client, conversation_id, "yes").get_json()
     assert "Choose an intake" in offered["message"]["content"]
-    assert "Infection Control" in offered["message"]["content"]
+    assert "Front Desk Operations" in offered["message"]["content"]
     with app.app_context():
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
         assert [row.status for row in rows] == ["confirmed", "pending_addition"]
@@ -508,7 +508,7 @@ def test_cancelled_course_is_reactivated_in_place_and_allocated_once(
 
     send(client, conversation_id, "Cancel course 2")
     send(client, conversation_id, "Confirm course cancellation")
-    offered = send(client, conversation_id, "Add the Infection Control course").get_json()
+    offered = send(client, conversation_id, "Add the Front Desk Operations course").get_json()
     assert "Choose an intake" in offered["message"]["content"]
     with app.app_context():
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()

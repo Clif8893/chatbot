@@ -49,10 +49,10 @@ def test_screenshot_request_only_displays_the_course_gate(tmp_path, fake_ai):
     content = payload["message"]["content"]
 
     assert content.count("Please choose a course") == 1
-    assert content.count("2-Day Basic Certificate in Dental Assisting") == 1
-    assert content.count("1-Day Dental Infection Control & Sterilisation Workshop") == 1
+    assert content.count("Basic Certificate in Dental Assisting") == 1
+    assert content.count("Certificate in Dental Clinic Front Desk Operations") == 1
     assert "S$600 nett" in content
-    assert "S$350 nett" in content
+    assert "S$450 nett" in content
     assert "Enrollment Started" not in content
     assert "Awaiting staff confirmation" not in content
     assert not any(
@@ -76,20 +76,20 @@ def test_screenshot_request_only_displays_the_course_gate(tmp_path, fake_ai):
         assert conversation.pending_followup == COURSE_SELECTION_FOLLOWUP
         assert conversation.pending_change_data[COURSE_OPTIONS_KEY] == [
             "dental-assisting-basic",
-            "dental-infection-control",
+            "dental-clinic-front-desk-operations",
         ]
 
 
 @pytest.mark.parametrize(
     ("choice", "course_id", "present", "absent"),
     [
-        ("1", "dental-assisting-basic", "10–11 October 2026", "18 October 2026"),
-        ("2", "dental-infection-control", "18 October 2026", "10–11 October 2026"),
+        ("1", "dental-assisting-basic", "18–19 November 2026", "2 December 2026"),
+        ("2", "dental-clinic-front-desk-operations", "2 December 2026", "18–19 November 2026"),
         (
-            "1-Day Dental Infection Control & Sterilisation Workshop",
-            "dental-infection-control",
-            "18 October 2026",
-            "10–11 October 2026",
+            "Certificate in Dental Clinic Front Desk Operations",
+            "dental-clinic-front-desk-operations",
+            "2 December 2026",
+            "18–19 November 2026",
         ),
     ],
 )
@@ -163,7 +163,7 @@ def test_valid_intake_starts_participant_details_without_requesting_intake_again
 
 @pytest.mark.parametrize(
     "choice",
-    ("both", "1 and 2", "Dental Assisting and Infection Control"),
+    ("both", "1 and 2", "Dental Assisting and Front Desk Operations"),
 )
 def test_two_courses_require_each_stage_before_participant_details(
     tmp_path, fake_ai, choice
@@ -174,13 +174,13 @@ def test_two_courses_require_each_stage_before_participant_details(
     _open_gate(client, conversation_id)
 
     selected = send(client, conversation_id, choice).get_json()
-    assert "10–11 October 2026" in selected["message"]["content"]
-    assert "18 October 2026" not in selected["message"]["content"]
+    assert "18–19 November 2026" in selected["message"]["content"]
+    assert "2 December 2026" not in selected["message"]["content"]
     assert "Full name as shown on NRIC" not in selected["message"]["content"]
 
     first = send(client, conversation_id, "1").get_json()
     assert "Now choose an intake for Course 2" in first["message"]["content"]
-    assert "18 October 2026" in first["message"]["content"]
+    assert "2 December 2026" in first["message"]["content"]
     assert "Full name as shown on NRIC" not in first["message"]["content"]
     assert first["enrollment"]["courses"][0]["selected_intake"] is not None
     assert first["enrollment"]["courses"][1]["selected_intake"] is None
@@ -214,7 +214,7 @@ def test_faq_and_backend_restart_preserve_course_selection_stage(tmp_path, fake_
         json={"conversation_id": conversation_id, "message": "2"},
         headers={"X-CSRF-Token": login["csrf_token"]},
     ).get_json()
-    assert selected["enrollment"]["course_id"] == "dental-infection-control"
+    assert selected["enrollment"]["course_id"] == "dental-clinic-front-desk-operations"
 
 
 def test_new_chat_and_discarded_draft_do_not_inherit_course_state(tmp_path, fake_ai):
@@ -234,14 +234,14 @@ def test_new_chat_and_discarded_draft_do_not_inherit_course_state(tmp_path, fake
     assert restarted["enrollment"]["course_id"] is None
     assert "Enrollment Started" not in restarted["message"]["content"]
     replacement = send(client, first_id, "2").get_json()
-    assert replacement["enrollment"]["course_id"] == "dental-infection-control"
+    assert replacement["enrollment"]["course_id"] == "dental-clinic-front-desk-operations"
 
 
 class HallucinatingCourseAI(FakeAIService):
     def extract_enrollment(self, message, context, draft_state, tools=None):
         return EnrollmentExtraction(
             extracted_fields=EnrollmentFields(
-                course="2-Day Basic Certificate in Dental Assisting"
+                course="Basic Certificate in Dental Assisting"
             )
         )
 

@@ -23,7 +23,7 @@ def test_skillsfuture_questions_use_written_answer_without_unapproved_attachment
     assert response.status_code == 200
     message = response.get_json()["message"]
 
-    assert "basic-tier SkillsFuture Credits" in message["content"]
+    assert "SkillsFuture eligibility has not been confirmed" in message["content"]
     assert "image_url" not in message
     assert "image_alt" not in message
     assert "image_status" not in message
@@ -75,6 +75,7 @@ def test_skillsfuture_faq_interruption_does_not_expose_unapproved_attachment(
     client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, "My name is Test Student")
     faq = send(
         client,

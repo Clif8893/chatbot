@@ -47,8 +47,8 @@ class IntakeService:
             "course_id": row.course_id or DEFAULT_COURSE_ID,
             "start_date": row.date.isoformat(),
             "end_date": row.end_date.isoformat(),
-            "start_time": (row.start_time or time(9, 30)).strftime("%H:%M"),
-            "end_time": (row.end_time or time(17, 30)).strftime("%H:%M"),
+            "start_time": _display_time(row.start_time),
+            "end_time": _display_time(row.end_time),
             "intake_type": intake_type,
             "display_date": _display_range(row.date, row.end_date),
             "capacity": row.capacity,
@@ -59,7 +59,7 @@ class IntakeService:
         }
 
     def seed_intakes(self, records):
-        """Insert missing catalogue rows once; never overwrite staff-managed rows."""
+        """Insert or refresh canonical catalogue rows without resetting counts."""
         created = 0
         for item in records:
             existing = db.session.get(CourseDate, item["id"])
@@ -68,6 +68,21 @@ class IntakeService:
                     date=datetime.strptime(item["start_date"], "%Y-%m-%d").date()
                 ).first()
             if existing is not None:
+                if existing.id == item["id"]:
+                    existing.course_id = item.get("course_id", DEFAULT_COURSE_ID)
+                    existing.date = datetime.strptime(
+                        item["start_date"], "%Y-%m-%d"
+                    ).date()
+                    existing.end_date = datetime.strptime(
+                        item["end_date"], "%Y-%m-%d"
+                    ).date()
+                    existing.start_time = _parse_time(item.get("start_time"))
+                    existing.end_time = _parse_time(item.get("end_time"))
+                    existing.label = item.get(
+                        "intake_type", item.get("label", "")
+                    )
+                    existing.status = item.get("status", "open")
+                    existing.is_demo = bool(item.get("is_demo"))
                 continue
             db.session.add(
                 CourseDate(
@@ -75,8 +90,8 @@ class IntakeService:
                     course_id=item.get("course_id", DEFAULT_COURSE_ID),
                     date=datetime.strptime(item["start_date"], "%Y-%m-%d").date(),
                     end_date=datetime.strptime(item["end_date"], "%Y-%m-%d").date(),
-                    start_time=_parse_time(item.get("start_time", "09:30")),
-                    end_time=_parse_time(item.get("end_time", "17:30")),
+                    start_time=_parse_time(item.get("start_time")),
+                    end_time=_parse_time(item.get("end_time")),
                     label=item.get("intake_type", item.get("label", "")),
                     capacity=int(item.get("capacity", 20)),
                     participant_count=int(item.get("participant_count", 0)),
@@ -85,9 +100,29 @@ class IntakeService:
                 )
             )
             created += 1
-        if created:
+        if created or db.session.dirty:
             db.session.commit()
         return created
+
+    def sync_catalogue_intakes(self, records, retired_course_ids=()):
+        """Seed approved rows and retire only superseded catalogue/demo choices."""
+        records = list(records)
+        created = self.seed_intakes(records)
+        approved_ids = {item["id"] for item in records}
+        retired_course_ids = set(retired_course_ids or ())
+        retired = 0
+        for row in CourseDate.query.all():
+            obsolete_demo = bool(row.is_demo and row.id not in approved_ids)
+            obsolete_course = row.course_id in retired_course_ids
+            if (
+                (obsolete_demo or obsolete_course)
+                and row.status in {"open", "full"}
+            ):
+                row.status = "retired"
+                retired += 1
+        if retired:
+            db.session.commit()
+        return {"created": created, "retired": retired}
 
     def seed_demo_intakes(self, records):
         return self.seed_intakes(records)
@@ -312,7 +347,15 @@ class IntakeService:
 
 
 def _parse_time(value):
+    if value in (None, ""):
+        return time.min
     return datetime.strptime(str(value), "%H:%M").time()
+
+
+def _display_time(value):
+    if value in (None, time.min):
+        return None
+    return value.strftime("%H:%M")
 
 
 def _display_range(start, end):

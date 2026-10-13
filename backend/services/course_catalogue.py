@@ -31,7 +31,7 @@ class CourseCatalogue:
             self._data = json.load(catalogue_file)
         self.enable_demo_intakes = bool(enable_demo_intakes)
         self._intake_provider = None
-        self._validate_demo_intakes()
+        self._validate_intakes()
 
     def bind_intake_provider(self, provider):
         """Use the portal database as runtime intake source of truth."""
@@ -45,22 +45,29 @@ class CourseCatalogue:
     def courses(self):
         return [self.course, *self._data.get("additional_courses", [])]
 
+    @property
+    def retired_course_ids(self):
+        return set(self._data.get("content_status", {}).get("retired_course_ids", []))
+
     def course_for(self, value):
         if isinstance(value, dict):
             return value
         supplied = str(value or "").casefold().strip()
         if supplied == "basic-dental-assisting":
             supplied = "dental-assisting-basic"
+        if not supplied:
+            return None
         for course in self.courses:
             aliases = {
                 str(course.get("id", "")).casefold(),
                 str(course.get("code", "")).casefold(),
                 str(course.get("name", "")).casefold(),
             }
+            aliases.discard("")
             if supplied in aliases or (
-                "infection" in supplied and "infection" in course["name"].casefold()
-            ) or (
                 "dental assist" in supplied and "dental assist" in course["name"].casefold()
+            ) or (
+                "front desk" in supplied and "front desk" in course["name"].casefold()
             ):
                 return course
         return None
@@ -90,7 +97,7 @@ class CourseCatalogue:
         if not numeric_choice and ":" not in text and "\n" not in str(value or ""):
             numeric_choice = len(text) < 100 and any(
                 marker in text
-                for marker in ("course", "dental assist", "infection control", "twice")
+                for marker in ("course", "dental assist", "front desk", "twice")
             )
         if numeric_choice:
             # A digit in an approved name such as "1-Day" or "2-Day" is not
@@ -103,8 +110,8 @@ class CourseCatalogue:
             aliases = [course.get("name", ""), course.get("code", "")]
             if course["id"] == "dental-assisting-basic":
                 aliases.extend(("dental assisting", "dental assistant"))
-            if course["id"] == "dental-infection-control":
-                aliases.extend(("infection control", "sterilisation workshop"))
+            if course["id"] == "dental-clinic-front-desk-operations":
+                aliases.extend(("front desk", "front desk operations"))
             found = []
             for alias in aliases:
                 alias_text = str(alias).casefold().strip()
@@ -215,7 +222,13 @@ class CourseCatalogue:
             return f"The {name} is {self.course_fee_display_for(course)}."
         if topic == "time":
             duration = course.get("duration", "the scheduled training period")
-            return f"The {name} runs from {course.get('training_time', 'a time confirmed by staff')} ({duration})."
+            training_time = course.get("training_time")
+            if not training_time:
+                return (
+                    f"The {name} runs for {duration.casefold()}. "
+                    "The training hours have not been confirmed; our team will need to confirm them for you."
+                )
+            return f"The {name} runs from {training_time} ({duration})."
         if topic == "venue":
             return course.get("venue", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
         if topic == "paynow":
@@ -234,12 +247,16 @@ class CourseCatalogue:
         )
 
     def course_fee_for(self, value):
-        course = self.course_for(value) or self.course
+        course = self.course_for(value)
+        if course is None:
+            return self.course_fee if value in (None, "") else None
         amount = course.get("fee", {}).get("amount")
         return Decimal(str(amount)) if amount not in (None, "") else None
 
     def course_fee_display_for(self, value):
-        course = self.course_for(value) or self.course
+        course = self.course_for(value)
+        if course is None:
+            return self.course_fee_display if value in (None, "") else "Awaiting staff confirmation"
         return course.get("fee", {}).get("display") or "Awaiting staff confirmation"
 
     def course_id_for(self, value):
@@ -484,22 +501,24 @@ class CourseCatalogue:
             return f"{reason} No open intake is currently available. Staff confirmation is required."
         return f"{reason}\n\nAvailable choices:\n{self.intake_choices()}"
 
-    def _validate_demo_intakes(self):
+    def _validate_intakes(self):
         ids = set()
-        for item in self.demo_intakes:
+        for item in [*self.approved_intakes, *self.demo_intakes]:
             if not item["id"] or item["id"] in ids:
-                raise ValueError("Every demo intake must have a unique stable ID.")
+                raise ValueError("Every intake must have a unique stable ID.")
             ids.add(item["id"])
             start = date.fromisoformat(item["start_date"])
             end = date.fromisoformat(item["end_date"])
-            course = self.course_for(item.get("course_id")) or self.course
+            course = self.course_for(item.get("course_id"))
+            if course is None:
+                raise ValueError("Every intake must belong to a current canonical course.")
             one_day = str(course.get("duration", "")).casefold().startswith("one")
             expected_end = start if one_day else start + timedelta(days=1)
             if end != expected_end:
                 raise ValueError(
-                    "Development intake dates must match the configured course duration."
+                    "Intake dates must match the configured course duration."
                 )
-            if not item["is_demo"]:
+            if item in self.demo_intakes and not item["is_demo"]:
                 raise ValueError("Every demo intake must be marked is_demo=true.")
 
     @staticmethod
@@ -520,8 +539,8 @@ class CourseCatalogue:
             or _display_intake_range(start_date, end_date),
             "status": str(item.get("status", "open")).casefold(),
             "is_demo": bool(item.get("is_demo", is_demo)),
-            "start_time": item.get("start_time", "09:30"),
-            "end_time": item.get("end_time", "17:30"),
+            "start_time": item.get("start_time"),
+            "end_time": item.get("end_time"),
             "intake_type": item.get("intake_type") or item.get("label") or (
                 "Weekend" if start_date.weekday() >= 5 else "Weekday"
             ),
@@ -557,7 +576,9 @@ class CourseCatalogue:
         )
 
     def skillsfuture_display_for(self, course_value):
-        course = self.course_for(course_value) or self.course
+        course = self.course_for(course_value)
+        if course is None:
+            return "Awaiting staff confirmation"
         return course.get("skillsfuture", {}).get(
             "customer_reply", "Awaiting staff confirmation"
         )
@@ -611,24 +632,46 @@ class CourseCatalogue:
         course = self.course_for(course_value)
         if not course:
             return self.staff_confirmation_message
-        return (
-            f"📚 {course['name']}\n\n"
-            f"{course.get('overview', '')}\n\n"
-            f"- Course fee: {course['fee']['display']}\n"
-            f"- Duration: {course['duration'].capitalize()}\n"
-            f"- Training hours: {course['training_time']}\n"
-            f"- SkillsFuture: {self.skillsfuture_display_for(course['id'])}\n"
-            f"- Venue: {course.get('venue', {}).get('customer_reply', 'Confirmed with the selected intake')}"
+        lines = [
+            f"📚 {course['name']}",
+            "",
+            f"- Course fee: {course['fee']['display']}",
+            f"- Duration: {course['duration']}",
+        ]
+        if course.get("training_time"):
+            lines.append(f"- Training hours: {course['training_time']}")
+        else:
+            lines.append("- Training hours: Awaiting staff confirmation")
+        intakes = self.selectable_intakes_for(course["id"])
+        if intakes:
+            lines.append(
+                "- Upcoming intakes: "
+                + "; ".join(
+                    f"{item['display_date']} — {item['intake_type']}"
+                    for item in intakes
+                )
+            )
+        lines.append(
+            "- Venue: "
+            + course.get("venue", {}).get(
+                "customer_reply", self.staff_confirmation_message
+            )
         )
+        return "\n".join(lines)
 
     def _course_dates_reply(self):
         if not self.has_intake_dates:
             return self.no_intakes_message
-        dates = "\n".join(
-            f"{index}. {item['display_date']} — {item['intake_type']} — Open"
-            for index, item in enumerate(self.selectable_intakes, start=1)
-        )
-        return f"📅 Available Intake Dates\n\n{dates}"
+        sections = ["📅 Available Intake Dates"]
+        for course in self.courses:
+            sections.extend(["", course["name"]])
+            sections.extend(
+                f"{index}. {item['display_date']} — {item['intake_type']} — Open"
+                for index, item in enumerate(
+                    self.selectable_intakes_for(course["id"]), start=1
+                )
+            )
+        return "\n".join(sections)
 
     def ground_faq_answer(self, answer):
         """Reject high-risk numeric claims that are absent from approved content."""

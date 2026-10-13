@@ -67,7 +67,7 @@ def test_messages_are_persisted_and_reloadable(client, conversation_id):
     assert send(
         client,
         conversation_id,
-        "What is the duration of the 2-Day Basic Certificate in Dental Assisting?",
+        "What is the duration of the Basic Certificate in Dental Assisting?",
     ).status_code == 200
     history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
     messages = history["messages"]
@@ -141,8 +141,8 @@ def test_pending_course_offer_survives_restart_without_automatic_selection(tmp_p
     conversation_id = first_client.post("/api/conversations").get_json()[
         "conversation_id"
     ]
-    offer = send(first_client, conversation_id, "Tell me about the course").get_json()
-    assert "Would you like" in offer["message"]["content"]
+    offer = send(first_client, conversation_id, "I want to enroll").get_json()
+    assert "Please choose a course" in offer["message"]["content"]
 
     second_app = create_app(
         {"TESTING": True, "SQLALCHEMY_DATABASE_URI": database_uri},
@@ -182,6 +182,7 @@ def test_enrollment_progress_survives_application_restart(tmp_path, fake_ai):
         "conversation_id"
     ]
     send(first_client, conversation_id, "I want to enroll in Dental Assisting")
+    send(first_client, conversation_id, "1")
     send(first_client, conversation_id, "My name is Test Student")
 
     second_app = create_app(
@@ -221,6 +222,7 @@ def test_nric_is_masked_in_history_agent_context_and_logs(
     client, conversation_id, fake_ai, caplog
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, "My NRIC is S1234567D")
     send(client, conversation_id, "My email is test.student@example.com")
     history = client.get(f"/api/conversations/{conversation_id}/messages").get_json()
@@ -240,6 +242,7 @@ def test_identity_and_contact_values_are_redacted_at_ai_and_log_boundaries(
     client, conversation_id, fake_ai, caplog
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     message = (
         "Full name: Avery Tan; NRIC: S1234567D; Date of birth: 2000-05-15; "
         "Email: avery.private@example.com; Mobile: 91234567"

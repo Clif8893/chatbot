@@ -15,10 +15,18 @@ SYNTHETIC_NAME = "Test Student"
 SYNTHETIC_NRIC = "S1234567D"
 SYNTHETIC_EMAIL = "test.student@example.com"
 SYNTHETIC_MOBILE = "91234567"
+EXPECTED_INTAKE = {
+    "id": "dental-assisting-2026-11-18",
+    "start_date": "2026-11-18",
+    "end_date": "2026-11-19",
+    "display_date": "18–19 November 2026",
+    "is_demo": False,
+}
 
 
 def complete_draft(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, f"My name is {SYNTHETIC_NAME}")
     send(client, conversation_id, f"My NRIC is {SYNTHETIC_NRIC}")
     send(client, conversation_id, "My DOB is 1990-01-02")
@@ -31,7 +39,18 @@ def complete_draft(client, conversation_id):
 def dated_catalogue(tmp_path):
     data = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
     data["course"]["intakes"] = [
-        {"date": "2027-10-17", "display": "17 October 2027"}
+        {
+            "id": "approved-2027-10-17-1",
+            "course_id": "dental-assisting-basic",
+            "start_date": "2027-10-17",
+            "end_date": "2027-10-18",
+            "display_date": "17–18 October 2027",
+            "intake_type": "Weekend",
+            "capacity": 20,
+            "participant_count": 0,
+            "status": "open",
+            "is_demo": False,
+        }
     ]
     path = tmp_path / "course_information.json"
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -42,6 +61,7 @@ def test_partial_submission_lists_all_remaining_fields(client, conversation_id):
     first = send(
         client, conversation_id, "I want to enroll in Dental Assisting"
     ).get_json()
+    send(client, conversation_id, "1")
     second = send(
         client, conversation_id, f"My name is {SYNTHETIC_NAME}"
     ).get_json()
@@ -62,10 +82,10 @@ def test_starting_enrollment_requires_course_selection_before_participant_detail
     reply = send(client, conversation_id, "I want to enroll").get_json()["message"][
         "content"
     ]
-    assert "2-Day Basic Certificate in Dental Assisting" in reply
-    assert "1-Day Dental Infection Control" in reply
+    assert "Basic Certificate in Dental Assisting" in reply
+    assert "Certificate in Dental Clinic Front Desk Operations" in reply
     assert "S$600 nett" in reply
-    assert "S$350 nett" in reply
+    assert "S$450 nett" in reply
     assert "Reply with the course number, course name, or both." in reply
     assert "Enrollment Started" not in reply
     assert "Available intake" not in reply
@@ -74,6 +94,7 @@ def test_starting_enrollment_requires_course_selection_before_participant_detail
 
 def test_multiple_fields_can_be_extracted_from_one_message(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(
         client,
         conversation_id,
@@ -93,6 +114,7 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(
         client,
         conversation_id,
@@ -103,7 +125,6 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
                 "Date of birth: 15 May 2000",
                 f"Email: {SYNTHETIC_EMAIL}",
                 f"Mobile number: {SYNTHETIC_MOBILE}",
-                "Preferred intake: Awaiting confirmation",
                 "Payment method: SkillsFuture and PayNow",
                 "SkillsFuture amount: S$400",
                 "PayNow amount: S$200",
@@ -114,12 +135,12 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
     assert response["enrollment"] == {
         "status": "awaiting_confirmation",
         "course_id": "dental-assisting-basic",
-        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_name": "Basic Certificate in Dental Assisting",
         "course_fee": "600.00",
         "friendly_reference": None,
         "missing_fields": [],
         "demo_intakes_enabled": False,
-        "selected_intake": None,
+        "selected_intake": EXPECTED_INTAKE,
     }
     reply = response["message"]["content"]
     assert "Course\n" in reply
@@ -131,7 +152,7 @@ def test_all_fields_are_extracted_from_copyable_structured_message(
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.nric == SYNTHETIC_NRIC
-        assert draft.preferred_intake_date is None
+        assert draft.preferred_intake_date.isoformat() == "2026-11-18"
         assert draft.payment_method is None
         assert draft.skillsfuture_amount is None
         assert draft.paynow_amount is None
@@ -141,12 +162,12 @@ def test_all_fields_are_extracted_from_one_natural_language_sentence(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(
         client,
         conversation_id,
         f"{SYNTHETIC_NAME}, {SYNTHETIC_NRIC}, born 15 May 2000, "
-        f"{SYNTHETIC_EMAIL}, {SYNTHETIC_MOBILE}. I want the next available "
-        "intake and will use $400 SkillsFuture with $200 PayNow.",
+        f"{SYNTHETIC_EMAIL}, {SYNTHETIC_MOBILE}.",
     ).get_json()
 
     assert response["enrollment"]["status"] == "awaiting_confirmation"
@@ -167,6 +188,7 @@ def test_partial_details_are_saved_then_completed_without_repetition(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     partial = send(
         client,
         conversation_id,
@@ -183,8 +205,7 @@ def test_partial_details_are_saved_then_completed_without_repetition(
     completed = send(
         client,
         conversation_id,
-        f"DOB: 15 May 2000; mobile: {SYNTHETIC_MOBILE}; "
-        "Preferred intake: Awaiting confirmation; PayNow amount: S$600",
+        f"DOB: 15 May 2000; mobile: {SYNTHETIC_MOBILE}; PayNow amount: S$600",
     ).get_json()
     assert completed["enrollment"]["status"] == "awaiting_confirmation"
     with app.app_context():
@@ -194,23 +215,23 @@ def test_partial_details_are_saved_then_completed_without_repetition(
         assert draft.email == SYNTHETIC_EMAIL
 
 
-def test_no_dates_saves_enrollment_awaiting_course_date_confirmation(
+def test_selected_date_saves_and_confirms_enrollment(
     app, client, conversation_id
 ):
     summary = complete_draft(client, conversation_id).get_json()
     assert summary["enrollment"]["status"] == "awaiting_confirmation"
-    assert "Awaiting staff confirmation" in summary["message"]["content"]
+    assert "18–19 November 2026" in summary["message"]["content"]
 
     confirmation = send(client, conversation_id, "Yes, confirm").get_json()
-    assert confirmation["enrollment"]["status"] == "awaiting_course_date"
+    assert confirmation["enrollment"]["status"] == "confirmed"
     reply = confirmation["message"]["content"]
-    assert "recorded successfully ✅" in reply
-    assert "upcoming intake date and exact training venue" in reply
+    assert "confirmed successfully ✅" in reply
+    assert "18–19 November 2026" in reply
     assert "July 2026" not in reply
     assert "Clementi Loop" not in reply
     with app.app_context():
         saved = EnrollmentDraft.query.one()
-        assert saved.preferred_intake_date is None
+        assert saved.preferred_intake_date.isoformat() == "2026-11-18"
         assert saved.confirmed_at is not None
 
 
@@ -243,14 +264,14 @@ def test_all_required_enrollment_fields_are_stored_and_confirmed(
         "missing_fields": [],
         "demo_intakes_enabled": False,
         "course_id": "dental-assisting-basic",
-        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_name": "Basic Certificate in Dental Assisting",
         "course_fee": "600.00",
         "friendly_reference": None,
         "selected_intake": {
             "id": "approved-2027-10-17-1",
             "start_date": "2027-10-17",
-            "end_date": "2027-10-17",
-            "display_date": "17 October 2027",
+            "end_date": "2027-10-18",
+            "display_date": "17–18 October 2027",
             "is_demo": False,
         },
     }
@@ -279,7 +300,7 @@ def test_repeated_confirmation_does_not_create_duplicate(app, client, conversati
     complete_draft(client, conversation_id)
     send(client, conversation_id, "confirm")
     repeated = send(client, conversation_id, "confirm").get_json()
-    assert "details are already saved" in repeated["message"]["content"]
+    assert "already confirmed" in repeated["message"]["content"]
     with app.app_context():
         assert db.session.query(EnrollmentDraft).count() == 1
 
@@ -298,6 +319,7 @@ def test_user_can_correct_a_field_before_confirmation(client, conversation_id):
 
 def test_faq_interruption_preserves_and_resumes_enrollment(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, f"My name is {SYNTHETIC_NAME}")
     faq = send(client, conversation_id, "What is the course fee?").get_json()
     assert faq["routing"]["intent"] == "faq"
@@ -314,7 +336,6 @@ def test_faq_interruption_preserves_and_resumes_enrollment(client, conversation_
     "payment_text",
     (
         "Payment method: PayNow; PayNow amount: S$600",
-        "I will use UTAP",
         "SkillsFuture S$400 and PayNow S$200",
     ),
 )
@@ -322,6 +343,7 @@ def test_payment_details_are_ignored_and_never_stored(
     app, client, conversation_id, payment_text
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(
         client,
         conversation_id,
@@ -346,6 +368,7 @@ def test_invalid_email_and_mobile_are_corrected_without_losing_valid_details(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     invalid = send(
         client,
         conversation_id,
@@ -377,6 +400,7 @@ def test_retired_payment_wording_does_not_block_other_valid_fields(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     conflict = send(
         client,
         conversation_id,
@@ -434,6 +458,7 @@ def test_later_irrelevant_extraction_cannot_revalidate_or_replace_saved_identity
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     for message in (
         "I want to enroll in Dental Assisting",
+        "1",
         f"My name is {SYNTHETIC_NAME}",
         f"My NRIC is {SYNTHETIC_NRIC}",
         "My DOB is 15 May 2000",
@@ -451,12 +476,12 @@ def test_later_irrelevant_extraction_cannot_revalidate_or_replace_saved_identity
     assert response["enrollment"] == {
         "status": "awaiting_confirmation",
         "course_id": "dental-assisting-basic",
-        "course_name": "2-Day Basic Certificate in Dental Assisting",
+        "course_name": "Basic Certificate in Dental Assisting",
         "course_fee": "600.00",
         "friendly_reference": None,
         "missing_fields": [],
         "demo_intakes_enabled": False,
-        "selected_intake": None,
+        "selected_intake": EXPECTED_INTAKE,
     }
     assert "valid Singapore NRIC" not in response["message"]["content"]
     assert "S1234567D" not in response["message"]["content"]
@@ -494,6 +519,7 @@ def test_extraction_cannot_fill_a_field_absent_from_the_current_message(tmp_path
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, f"My name is {SYNTHETIC_NAME}")
     send(client, conversation_id, f"My NRIC is {SYNTHETIC_NRIC}")
 
@@ -521,6 +547,7 @@ def test_enrollment_drafts_do_not_leak_between_conversations(app, client):
     first_id = client.post("/api/conversations").get_json()["conversation_id"]
     second_id = client.post("/api/conversations").get_json()["conversation_id"]
     send(client, first_id, "I want to enroll in Dental Assisting")
+    send(client, first_id, "1")
     send(client, first_id, f"My name is {SYNTHETIC_NAME}")
     send(client, first_id, f"My NRIC is {SYNTHETIC_NRIC}")
     second_reply = send(client, second_id, "I want to enroll").get_json()
@@ -565,12 +592,14 @@ def test_mobile_number_is_normalized():
 
 def test_invalid_nric_is_rejected(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(client, conversation_id, "My NRIC is 1234").get_json()
     assert "valid Singapore NRIC" in response["message"]["content"]
 
 
 def test_invalid_email_is_rejected(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(client, conversation_id, "My email is invalid-email").get_json()
     assert "valid email" in response["message"]["content"]
 
@@ -586,6 +615,7 @@ def test_sensitive_and_error_replies_do_not_contain_emojis(
     client, conversation_id, setup_messages, error_message
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = None
     for message in setup_messages:
         response = send(client, conversation_id, message).get_json()
@@ -596,6 +626,7 @@ def test_sensitive_and_error_replies_do_not_contain_emojis(
 
 def test_invalid_dob_is_rejected(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     response = send(client, conversation_id, "My DOB is 2099-01-01").get_json()
     assert "valid past date" in response["message"]["content"]
 
@@ -603,8 +634,7 @@ def test_invalid_dob_is_rejected(client, conversation_id):
 def test_unconfigured_intake_is_not_accepted(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
     response = send(client, conversation_id, "My intake is 1 January 2030").get_json()
-    expected = CourseCatalogue().no_intakes_message
-    assert expected in response["message"]["content"]
+    assert "not one of the available intakes" in response["message"]["content"]
 
 
 def test_full_name_must_contain_letters():

@@ -163,7 +163,9 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         lock_timeout=app.config["INVOICE_LOCK_TIMEOUT_SECONDS"],
         catalogue=catalogue,
     )
-    invoice_email_service = InvoiceEmailService(delivery, invoice_template_service)
+    invoice_email_service = InvoiceEmailService(
+        delivery, invoice_template_service, catalogue
+    )
     enrollment_resolver = CurrentEnrollmentResolver(catalogue)
     maintenance_service = MaintenanceService(
         master_invoice_service,
@@ -205,9 +207,10 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         backup_sqlite_before_schema_sync()
         db.create_all()
         apply_additive_migrations()
-        intake_service.seed_intakes(catalogue.approved_intakes)
-        if app.config.get("ENABLE_DEMO_INTAKES"):
-            intake_service.seed_demo_intakes(catalogue.demo_intakes)
+        intake_service.sync_catalogue_intakes(
+            catalogue.approved_intakes,
+            catalogue.retired_course_ids,
+        )
         catalogue.bind_intake_provider(intake_service.catalogue_items)
 
     app.register_blueprint(

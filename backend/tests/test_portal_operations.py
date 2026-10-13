@@ -73,7 +73,7 @@ def test_template_invoice_is_staff_only_and_unapproved_template_requires_review(
     with app.app_context():
         draft = EnrollmentDraft(
             conversation_id=conversation_id,
-            course="2-Day Basic Certificate in Dental Assisting",
+            course="Basic Certificate in Dental Assisting",
             course_fee=Decimal("600"),
             full_name="Test Student",
             nric="S1234567D",

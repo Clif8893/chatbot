@@ -374,7 +374,11 @@ class InvoiceTemplateService:
                 sheet.merge_cells(start_row=row_number, start_column=1, end_row=row_number, end_column=5)
                 sheet.cell(row_number, 1, selected.course_name)
                 sheet.merge_cells(start_row=row_number, start_column=6, end_row=row_number, end_column=7)
-                sheet.cell(row_number, 6, course.get("code") if course else "")
+                sheet.cell(
+                    row_number,
+                    6,
+                    (course.get("code") if course else None) or "—",
+                )
                 sheet.merge_cells(start_row=row_number, start_column=8, end_row=row_number, end_column=10)
                 sheet.cell(row_number, 8, display_course_range(selected))
                 sheet.cell(row_number, 11, float(_money(selected.course_fee)))
@@ -384,9 +388,10 @@ class InvoiceTemplateService:
         else:
             _label_value(sheet, 22, "A", "Course:", "C", enrollment.course, end="K")
             course = self.catalogue.course_for(enrollment.course_id or enrollment.course) if self.catalogue else None
-            course_code = course.get("code") if course else None
+            course_code = (course.get("code") if course else None) or "—"
             _label_value(sheet, 24, "A", "Course code:", "C", course_code, end="E")
-            _label_value(sheet, 24, "G", "Training time:", "I", "9:30am–5:30pm", end="K")
+            training_time = (course or {}).get("training_time") or "—"
+            _label_value(sheet, 24, "G", "Training time:", "I", training_time, end="K")
             _label_value(sheet, 26, "A", "Training date(s):", "C", _date_range(intake_date, intake_end), end="E")
         sheet.merge_cells("A29:K29")
         sheet["A29"] = "AMOUNT DUE"

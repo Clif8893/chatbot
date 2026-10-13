@@ -167,23 +167,19 @@ class FakeAIService:
             answer = faq_answers["Mid-Career SkillsFuture"]
         elif any(term in lowered for term in ("skillsfuture", "skillfuture", "skilsfuture", "funding")):
             topics = ["SkillsFuture"]
-            answer = course["skillsfuture"]["customer_reply"]
-            answer += f" You can check your balance at {course['skillsfuture']['claim_page']}."
+            answer = faq_answers["SkillsFuture"]
         elif "utap" in lowered or "union" in lowered:
             topics = ["UTAP"]
-            answer = course["utap"]["customer_reply"]
+            answer = faq_answers["UTAP"]
         elif "paynow" in lowered or "pay now" in lowered or "uen" in lowered:
             topics = ["PayNow"]
-            answer = course["paynow"]["customer_reply"]
+            answer = faq_answers["PayNow"]
         elif any(term in lowered for term in ("payment option", "payment mode", "paymnt")):
             topics = ["payment options"]
             answer = faq_answers["payment options"]
         elif asks_fee and asks_duration:
             topics = ["course fee and value", "duration and timing"]
-            answer = (
-                f"The full course fee is {course['fee']['display']}. Training runs "
-                f"over {course['duration']}, from {course['training_time']}."
-            )
+            answer = faq_answers["course fee and value"] + " " + faq_answers["duration and timing"]
         elif asks_fee:
             topics = ["course fee and value"]
             answer = faq_answers["course fee and value"]
@@ -192,7 +188,7 @@ class FakeAIService:
             answer = faq_answers["duration and timing"]
         elif "location" in lowered or "where" in lowered or "venue" in lowered:
             topics = ["venue"]
-            answer = course["venue"]["customer_reply"]
+            answer = faq_answers["venue"]
         elif any(
             term in lowered
             for term in ("date", "intake", "when", "next class", "next course")
@@ -201,13 +197,13 @@ class FakeAIService:
             answer = course["no_intakes_message"]
         elif "qualification" in lowered or "qualified" in lowered or "requirement" in lowered:
             topics = ["minimum qualification"]
-            answer = course["minimum_qualification"]
+            answer = faq_answers["minimum qualification"]
         elif "job" in lowered or "position" in lowered or "work" in lowered:
             topics = ["job opportunities"]
-            answer = course["employment"]["customer_reply"]
+            answer = faq_answers["job opportunities"]
         elif "website" in lowered or "more details" in lowered:
             topics = ["course website"]
-            answer = f"You can find more course details at {course['website']}."
+            answer = faq_answers["course website"]
         elif "invoice" in lowered or "claim steps" in lowered:
             topics = ["invoice and claim guidance"]
             answer = faq_answers["invoice and claim guidance"]
@@ -216,7 +212,7 @@ class FakeAIService:
             answer = faq_answers["payment screenshot channel"]
         elif "enrol" in lowered or "enroll" in lowered or "register" in lowered:
             topics = ["enrolment process"]
-            answer = course["enrollment"]["customer_reply"]
+            answer = faq_answers["enrolment process"]
         elif "parking" in lowered:
             answer = catalogue["reply_style"]["staff_confirmation_message"]
         else:
@@ -312,8 +308,10 @@ class FakeAIService:
             elif bare_mobile:
                 fields["mobile_number"] = bare_mobile.group(1)
 
-        if "2-day basic certificate" in lowered:
-            fields["course"] = "2-Day Basic Certificate in Dental Assisting"
+        if "basic certificate" in lowered and "dental assisting" in lowered:
+            fields["course"] = "Basic Certificate in Dental Assisting"
+        elif "front desk" in lowered:
+            fields["course"] = "Certificate in Dental Clinic Front Desk Operations"
 
         confirmation = (
             "confirm"

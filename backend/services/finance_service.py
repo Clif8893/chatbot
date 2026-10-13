@@ -383,7 +383,7 @@ class FinanceService:
                 f"Dear {draft.full_name},\n\nYour S${invoice.course_fee:.2f} course payment is confirmed.\n"
                 f"Course: {draft.course}\nDates: {draft.preferred_intake_date or 'Awaiting staff confirmation'}"
                 + (f" to {intake.end_date}" if intake else "")
-                + f"\nTraining time: {course['training_time']}\nVenue: {course.get('venue', {}).get('customer_reply', 'Staff confirmation required')}\n"
+                + f"\nTraining time: {(course or {}).get('training_time') or 'Staff confirmation required'}\nVenue: {(course or {}).get('venue', {}).get('customer_reply', 'Staff confirmation required')}\n"
                 + "Your receipt email is processed separately. Contact course administration if you need attendance assistance.",
                 conversation_id=draft.conversation_id, purpose="course_payment_confirmation")
             if draft.mobile_number:

@@ -46,20 +46,20 @@ def test_status_variations_are_deterministic(tmp_path, fake_ai, question):
     assert after == before
     assert "Enrollment Status: Confirmed" in content
     assert "ENR-2026-000001" in content
-    assert "10" in content and "11 October 2026" in content
+    assert "18–19 November 2026" in content
     assert "S1234567D" not in content
 
 
-def _add_infection_control(app, client, reference="ENR-2026-000002"):
+def _add_front_desk(app, client, reference="ENR-2026-000002"):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     with app.app_context():
         conversation = db.session.get(Conversation, conversation_id)
-        intake = db.session.get(CourseDate, "infection-control-2026-11-15")
+        intake = db.session.get(CourseDate, "front-desk-operations-2027-01-09")
         draft = EnrollmentDraft(
             conversation=conversation,
-            course_id="dental-infection-control",
-            course="1-Day Dental Infection Control & Sterilisation Workshop",
-            course_fee=Decimal("350"),
+            course_id="dental-clinic-front-desk-operations",
+            course="Certificate in Dental Clinic Front Desk Operations",
+            course_fee=Decimal("450"),
             full_name="Test Student",
             nric="S1234567D",
             date_of_birth=date(2000, 5, 15),
@@ -67,7 +67,7 @@ def _add_infection_control(app, client, reference="ENR-2026-000002"):
             mobile_number="91234567",
             payment_method="paynow",
             skillsfuture_amount=Decimal("0"),
-            paynow_amount=Decimal("350"),
+            paynow_amount=Decimal("450"),
             intake_id=intake.id,
             preferred_intake_date=intake.date,
             intake_start_date=intake.date,
@@ -89,13 +89,14 @@ def _add_infection_control(app, client, reference="ENR-2026-000002"):
 def test_training_lookup_uses_selected_course_and_intake(tmp_path, fake_ai, question):
     app = management_app(tmp_path, fake_ai, f"training-{abs(hash(question))}.db")
     client = authenticated_client(app)
-    conversation_id, _ = _add_infection_control(app, client)
+    conversation_id, _ = _add_front_desk(app, client)
     before = len(fake_ai.classify_calls)
     result = send(client, conversation_id, question).get_json()["message"]["content"]
     assert len(fake_ai.classify_calls) == before
-    assert "1-Day Dental Infection Control" in result
-    assert "15 November 2026" in result
-    assert "9:30am-5:30pm" in result
+    assert "Certificate in Dental Clinic Front Desk Operations" in result
+    assert "9 January 2027" in result
+    assert "Staff confirmation is required" in result
+    assert "9:30am" not in result
     assert "S$600" not in result
     assert "Basic Certificate" not in result
 
@@ -104,7 +105,7 @@ def test_explicit_reference_is_owner_scoped_and_resolves_multiple(tmp_path, fake
     app = management_app(tmp_path, fake_ai)
     owner = authenticated_client(app, email="owner@example.com")
     first_conversation, first_id = add_confirmed(app, owner)
-    second_conversation, _ = _add_infection_control(app, owner, "ENR-2026-000099")
+    second_conversation, _ = _add_front_desk(app, owner, "ENR-2026-000099")
     with app.app_context():
         first = db.session.get(EnrollmentDraft, first_id)
         first.course_id = "dental-assisting-basic"
@@ -112,7 +113,7 @@ def test_explicit_reference_is_owner_scoped_and_resolves_multiple(tmp_path, fake
         db.session.commit()
     blank = owner.post("/api/conversations").get_json()["conversation_id"]
     resolved = send(owner, blank, "Status for ENR-2026-000099").get_json()["message"]["content"]
-    assert "Infection Control" in resolved
+    assert "Front Desk Operations" in resolved
     assert "ENR-2026-000099" in resolved
 
     stranger = authenticated_client(app, email="stranger@example.com")
@@ -126,13 +127,13 @@ def test_generic_course_questions_are_focused_and_ambiguous_questions_clarify(tm
     app = management_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
-    fee = send(client, conversation_id, "How much is Infection Control?").get_json()["message"]["content"]
-    timing = send(client, conversation_id, "What time is the Infection Control workshop?").get_json()["message"]["content"]
+    fee = send(client, conversation_id, "How much is Front Desk Operations?").get_json()["message"]["content"]
+    timing = send(client, conversation_id, "What time is the Front Desk Operations workshop?").get_json()["message"]["content"]
     ambiguous = send(client, conversation_id, "How much is the course?").get_json()["message"]["content"]
-    assert "S$350 nett" in fee and "S$600" not in fee
-    assert "9:30am to 5:30pm" in timing and "S$350" not in timing
+    assert "S$450 nett" in fee and "S$600" not in fee
+    assert "training hours have not been confirmed" in timing and "9:30am" not in timing
     assert "Which course would you like to check?" in ambiguous
-    assert "2-Day Basic Certificate" in ambiguous and "1-Day Dental Infection Control" in ambiguous
+    assert "Basic Certificate" in ambiguous and "Certificate in Dental Clinic Front Desk Operations" in ambiguous
 
 
 def test_confirmation_invoice_preparation_text_occurs_once(tmp_path, fake_ai):
@@ -146,11 +147,11 @@ def test_confirmation_invoice_preparation_text_occurs_once(tmp_path, fake_ai):
         client,
         conversation_id,
         "Full name: Test Student; NRIC/FIN: S1234567D; Date of birth: 15 May 2000; "
-        "Email: test.student@example.com; Mobile number: 91234567; PayNow S$350",
+        "Email: test.student@example.com; Mobile number: 91234567; PayNow S$450",
     )
     confirmed = send(client, conversation_id, "Confirm").get_json()["message"]["content"]
     assert confirmed.casefold().count("invoice is being prepared") == 1
-    assert "1-Day Dental Infection Control" in confirmed
-    assert "18 October 2026" in confirmed
+    assert "Certificate in Dental Clinic Front Desk Operations" in confirmed
+    assert "2 December 2026" in confirmed
     assert "ENR-2026-" in confirmed
     assert confirmed.count("Need to make a change?") == 1

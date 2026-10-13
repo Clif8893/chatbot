@@ -55,7 +55,7 @@ def test_participant_details_cannot_bypass_required_intake_selection(tmp_path, f
     ).get_json()
     content = response["message"]["content"]
     assert "Available Intake Dates" in content
-    assert "10–11 October 2026" in content
+    assert "18–19 November 2026" in content
     assert "reply with the intake number or the dates you prefer" in content
     with app.app_context():
         draft = EnrollmentDraft.query.one()
@@ -63,7 +63,7 @@ def test_participant_details_cannot_bypass_required_intake_selection(tmp_path, f
         assert draft.date_of_birth is None
 
 
-def test_no_intakes_fallback_only_when_database_has_no_selectable_rows(tmp_path, fake_ai):
+def test_approved_intakes_remain_available_when_demo_flag_is_disabled(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai, demos=False)
     client = authenticated_client(app)
     response = send(
@@ -71,13 +71,14 @@ def test_no_intakes_fallback_only_when_database_has_no_selectable_rows(tmp_path,
         client.post("/api/conversations").get_json()["conversation_id"],
         "What intake dates are available?",
     ).get_json()
-    assert "dates are being updated" in response["message"]["content"]
-    assert "Available Intake Dates" not in response["message"]["content"]
+    assert "Available Intake Dates" in response["message"]["content"]
+    assert "18–19 November 2026" in response["message"]["content"]
+    assert "2 December 2026" in response["message"]["content"]
     assert fake_ai.classify_calls == []
     assert fake_ai.faq_calls == []
 
 
-def test_database_backed_intake_query_lists_all_demo_choices(tmp_path, fake_ai):
+def test_database_backed_intake_query_lists_all_approved_choices(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     response = send(
@@ -87,9 +88,12 @@ def test_database_backed_intake_query_lists_all_demo_choices(tmp_path, fake_ai):
     ).get_json()
     content = response["message"]["content"]
     assert "Available Intake Dates" in content
-    assert "10–11 October 2026 — Weekend — Open" in content
-    assert "4–5 November 2026 — Weekday — Open" in content
-    assert "21–22 November 2026 — Weekend — Open" in content
+    assert "18–19 November 2026 — Weekdays — Open" in content
+    assert "28–29 November 2026 — Weekend — Open" in content
+    assert "16–17 December 2026 — Weekdays — Open" in content
+    assert "2 December 2026 — Wednesday — Open" in content
+    assert "9 January 2027 — Saturday — Open" in content
+    assert "3 February 2027 — Wednesday — Open" in content
     assert "dates are being updated" not in content
     assert fake_ai.classify_calls == []
     assert fake_ai.faq_calls == []
@@ -292,7 +296,7 @@ def test_valid_fields_and_selected_intake_survive_backend_restart(tmp_path, fake
     history = resumed.get(
         f"/api/conversations/{conversation_id}/messages"
     ).get_json()
-    assert history["enrollment"]["selected_intake"]["id"] == "demo-2026-10-10"
+    assert history["enrollment"]["selected_intake"]["id"] == "dental-assisting-2026-11-18"
     with restarted.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.full_name == "Alex Lim"

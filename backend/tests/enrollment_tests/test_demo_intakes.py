@@ -17,10 +17,10 @@ from backend.services.master_invoice_service import HEADERS, SHEET_NAME, TABLE_N
 from backend.tests.conftest import authenticated_client, send
 
 
-DEMO_RECORDS = (
-    ("demo-2026-10-10", "2026-10-10", "2026-10-11", "10–11 October 2026"),
-    ("demo-2026-11-04", "2026-11-04", "2026-11-05", "4–5 November 2026"),
-    ("demo-2026-11-21", "2026-11-21", "2026-11-22", "21–22 November 2026"),
+APPROVED_RECORDS = (
+    ("dental-assisting-2026-11-18", "2026-11-18", "2026-11-19", "18–19 November 2026"),
+    ("dental-assisting-2026-11-28", "2026-11-28", "2026-11-29", "28–29 November 2026"),
+    ("dental-assisting-2026-12-16", "2026-12-16", "2026-12-17", "16–17 December 2026"),
 )
 
 
@@ -49,19 +49,19 @@ def begin_intake_selection(client):
     return conversation_id, reply
 
 
-def test_demo_records_are_structured_unique_valid_and_consecutive():
+def test_approved_records_are_structured_unique_valid_and_consecutive():
     catalogue = CourseCatalogue(enable_demo_intakes=True)
     records = [
-        item for item in catalogue.demo_intakes
+        item for item in catalogue.approved_intakes
         if item["course_id"] == "dental-assisting-basic"
     ]
 
     assert [
         (item["id"], item["start_date"], item["end_date"], item["display_date"])
         for item in records
-    ] == list(DEMO_RECORDS)
+    ] == list(APPROVED_RECORDS)
     assert len({item["id"] for item in records}) == 3
-    assert all(item["is_demo"] is True for item in records)
+    assert all(item["is_demo"] is False for item in records)
     assert all(item["status"] == "open" for item in records)
     for item in records:
         assert date.fromisoformat(item["end_date"]) == (
@@ -69,15 +69,15 @@ def test_demo_records_are_structured_unique_valid_and_consecutive():
         )
 
 
-def test_demo_dates_are_opt_in_and_hidden_by_default(tmp_path, fake_ai):
+def test_approved_dates_are_available_regardless_of_demo_flag(tmp_path, fake_ai):
     disabled = CourseCatalogue()
     enabled = CourseCatalogue(enable_demo_intakes=True)
-    assert disabled.intake_dates == []
+    assert len(disabled.intake_dates) == 6
     assert "demo-2026" not in disabled.agent_context()
     assert [
         item["start_date"]
         for item in enabled.selectable_intakes_for("basic-dental-assisting")
-    ] == [record[1] for record in DEMO_RECORDS]
+    ] == [record[1] for record in APPROVED_RECORDS]
 
     app = demo_app(tmp_path, fake_ai, enabled=False)
     client = authenticated_client(app)
@@ -88,8 +88,7 @@ def test_demo_dates_are_opt_in_and_hidden_by_default(tmp_path, fake_ai):
         created["conversation_id"],
         "I want to enroll in Dental Assisting",
     ).get_json()
-    assert "dates are being updated" in offer["message"]["content"]
-    assert "10–11 October 2026" not in offer["message"]["content"]
+    assert "18–19 November 2026" in offer["message"]["content"]
 
     env_example = (CATALOGUE_PATH.parents[1] / ".env.example").read_text(
         encoding="utf-8"
@@ -97,7 +96,7 @@ def test_demo_dates_are_opt_in_and_hidden_by_default(tmp_path, fake_ai):
     assert "ENABLE_DEMO_INTAKES=true" in env_example
 
 
-def test_enabled_flow_labels_and_lists_demo_intakes(tmp_path, fake_ai):
+def test_flow_lists_approved_intakes(tmp_path, fake_ai):
     app = demo_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id, selection = begin_intake_selection(client)
@@ -108,7 +107,7 @@ def test_enabled_flow_labels_and_lists_demo_intakes(tmp_path, fake_ai):
     assert "prototype" not in content.casefold()
     assert content.count("Available Intake Dates") == 1
     assert "Available Intake Dates" in content
-    for index, record in enumerate(DEMO_RECORDS, start=1):
+    for index, record in enumerate(APPROVED_RECORDS, start=1):
         assert f"{index}. {record[3]}" in content
     assert "reply with the intake number or the dates you prefer" in content
     assert conversation_id
@@ -116,7 +115,7 @@ def test_enabled_flow_labels_and_lists_demo_intakes(tmp_path, fake_ai):
 
 @pytest.mark.parametrize(
     ("selection", "expected_id"),
-    [("1", DEMO_RECORDS[0][0]), ("2", DEMO_RECORDS[1][0]), ("3", DEMO_RECORDS[2][0])],
+    [("1", APPROVED_RECORDS[0][0]), ("2", APPROVED_RECORDS[1][0]), ("3", APPROVED_RECORDS[2][0])],
 )
 def test_numbered_selection_persists_structured_intake(
     tmp_path, fake_ai, selection, expected_id
@@ -128,24 +127,24 @@ def test_numbered_selection_persists_structured_intake(
 
     selected = response["enrollment"]["selected_intake"]
     assert selected["id"] == expected_id
-    assert selected["is_demo"] is True
+    assert selected["is_demo"] is False
     with app.app_context():
         draft = EnrollmentDraft.query.one()
-        expected = next(record for record in DEMO_RECORDS if record[0] == expected_id)
+        expected = next(record for record in APPROVED_RECORDS if record[0] == expected_id)
         assert draft.intake_id == expected_id
         assert draft.intake_start_date.isoformat() == expected[1]
         assert draft.intake_end_date.isoformat() == expected[2]
         assert draft.preferred_intake_date == draft.intake_start_date
-        assert draft.intake_is_demo is True
+        assert draft.intake_is_demo is False
 
 
 @pytest.mark.parametrize(
     ("selection", "expected_id"),
     [
-        ("Option 3", DEMO_RECORDS[2][0]),
-        ("The third one", DEMO_RECORDS[2][0]),
-        ("21 November", DEMO_RECORDS[2][0]),
-        ("The last weekend intake", DEMO_RECORDS[2][0]),
+        ("Option 3", APPROVED_RECORDS[2][0]),
+        ("The third one", APPROVED_RECORDS[2][0]),
+        ("16 December", APPROVED_RECORDS[2][0]),
+        ("The weekend intake", APPROVED_RECORDS[1][0]),
     ],
 )
 def test_persisted_followup_resolves_natural_third_choice(
@@ -169,7 +168,7 @@ def test_displayed_choices_and_numeric_selection_survive_restart_and_login(
     conversation_id, _ = begin_intake_selection(owner)
     with app.app_context():
         conversation = db.session.get(Conversation, conversation_id)
-        assert conversation.pending_intake_options == [item[0] for item in DEMO_RECORDS]
+        assert conversation.pending_intake_options == [item[0] for item in APPROVED_RECORDS]
 
     restarted = demo_app(tmp_path, fake_ai, name=database_name)
     resumed = restarted.test_client()
@@ -184,7 +183,7 @@ def test_displayed_choices_and_numeric_selection_survive_restart_and_login(
         json={"conversation_id": conversation_id, "message": "3"},
         headers={"X-CSRF-Token": token},
     ).get_json()
-    assert selected["enrollment"]["selected_intake"]["id"] == DEMO_RECORDS[2][0]
+    assert selected["enrollment"]["selected_intake"]["id"] == APPROVED_RECORDS[2][0]
 
 
 def test_displayed_numeric_choice_is_rejected_if_it_closes_before_selection(
@@ -194,7 +193,7 @@ def test_displayed_numeric_choice_is_rejected_if_it_closes_before_selection(
     client = authenticated_client(app)
     conversation_id, _ = begin_intake_selection(client)
     with app.app_context():
-        row = db.session.get(CourseDate, DEMO_RECORDS[2][0])
+        row = db.session.get(CourseDate, APPROVED_RECORDS[2][0])
         row.status = "closed"
         db.session.commit()
 
@@ -206,10 +205,10 @@ def test_displayed_numeric_choice_is_rejected_if_it_closes_before_selection(
 @pytest.mark.parametrize(
     ("selection", "expected_id"),
     [
-        ("2026-10-10", DEMO_RECORDS[0][0]),
-        ("10–11 October 2026", DEMO_RECORDS[0][0]),
-        ("I choose 4 November", DEMO_RECORDS[1][0]),
-        ("weekend intake on 21 November", DEMO_RECORDS[2][0]),
+        ("2026-11-18", APPROVED_RECORDS[0][0]),
+        ("18–19 November 2026", APPROVED_RECORDS[0][0]),
+        ("I choose 28 November", APPROVED_RECORDS[1][0]),
+        ("weekend intake on 28 November", APPROVED_RECORDS[1][0]),
     ],
 )
 def test_date_range_and_natural_language_selection(
@@ -224,15 +223,19 @@ def test_date_range_and_natural_language_selection(
 
 def test_arbitrary_closed_and_ambiguous_intakes_are_rejected(tmp_path, fake_ai):
     base = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
-    base["course"]["demo_intakes"][1]["status"] = "closed"
-    base["course"]["demo_intakes"].append(
+    base["course"]["intakes"][1]["status"] = "closed"
+    base["course"]["intakes"].append(
         {
-            "id": "demo-2026-11-23",
+            "id": "dental-assisting-2026-11-23",
+            "course_id": "dental-assisting-basic",
             "start_date": "2026-11-23",
             "end_date": "2026-11-24",
             "display_date": "23–24 November 2026",
+            "intake_type": "Weekdays",
+            "capacity": 20,
+            "participant_count": 0,
             "status": "open",
-            "is_demo": True,
+            "is_demo": False,
         }
     )
     path = tmp_path / "intake-edge-cases.json"
@@ -242,7 +245,7 @@ def test_arbitrary_closed_and_ambiguous_intakes_are_rejected(tmp_path, fake_ai):
     closed_app = demo_app(tmp_path, fake_ai, catalogue=catalogue, name="closed.db")
     closed_client = authenticated_client(closed_app)
     conversation_id, _ = begin_intake_selection(closed_client)
-    closed = send(closed_client, conversation_id, "2026-11-04").get_json()
+    closed = send(closed_client, conversation_id, "2026-11-28").get_json()
     assert "intake is closed" in closed["message"]["content"]
     assert closed["enrollment"]["selected_intake"] is None
 
@@ -265,7 +268,7 @@ def test_intake_survives_faq_greeting_reload_logout_and_is_owner_scoped(
     greeting = send(owner, conversation_id, "Good morning").get_json()
     assert greeting["message"]["content"].startswith("Good morning")
     history = owner.get(f"/api/conversations/{conversation_id}/messages").get_json()
-    assert history["enrollment"]["selected_intake"]["id"] == DEMO_RECORDS[1][0]
+    assert history["enrollment"]["selected_intake"]["id"] == APPROVED_RECORDS[1][0]
 
     assert owner.post("/api/auth/logout").status_code == 200
     login = owner.post(
@@ -274,7 +277,7 @@ def test_intake_survives_faq_greeting_reload_logout_and_is_owner_scoped(
     )
     assert login.status_code == 200
     resumed = owner.get(f"/api/conversations/{conversation_id}/messages")
-    assert resumed.get_json()["enrollment"]["selected_intake"]["id"] == DEMO_RECORDS[1][0]
+    assert resumed.get_json()["enrollment"]["selected_intake"]["id"] == APPROVED_RECORDS[1][0]
 
     other = authenticated_client(app, email="other-demo-user@example.com")
     assert other.get(f"/api/conversations/{conversation_id}/messages").status_code == 404
@@ -292,7 +295,7 @@ def test_intake_correction_changes_only_intake_fields(tmp_path, fake_ai):
     send(client, conversation_id, "Full name: Test Student")
 
     corrected = send(client, conversation_id, "Correct intake: 3").get_json()
-    assert corrected["enrollment"]["selected_intake"]["id"] == DEMO_RECORDS[2][0]
+    assert corrected["enrollment"]["selected_intake"]["id"] == APPROVED_RECORDS[2][0]
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         assert draft.full_name == "Test Student"
@@ -319,7 +322,7 @@ def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
     review = _complete_enrollment(client, conversation_id)
 
     assert review["enrollment"]["status"] == "awaiting_confirmation"
-    assert "Preferred intake: 10–11 October 2026" in review["message"]["content"]
+    assert "Intake: 18–19 November 2026" in review["message"]["content"]
     assert "prototype" not in review["message"]["content"].casefold()
     service = app.extensions["master_invoice"]
     assert not service.workbook_path.exists()
@@ -342,9 +345,9 @@ def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
     sheet = workbook[SHEET_NAME]
     assert tuple(cell.value for cell in sheet[1]) == HEADERS
     assert sheet.max_row == 2
-    assert sheet[2][3].value == "2-Day Basic Certificate in Dental Assisting"
-    assert sheet[2][4].value.date().isoformat() == "2026-10-10"
-    assert sheet[2][5].value.date().isoformat() == "2026-10-11"
+    assert sheet[2][3].value == "Basic Certificate in Dental Assisting"
+    assert sheet[2][4].value.date().isoformat() == "2026-11-18"
+    assert sheet[2][5].value.date().isoformat() == "2026-11-19"
     assert sheet[2][7].value == 600
     assert sheet[2][8].value == "S1234567D"
     assert sheet[2][16].value is None
@@ -352,7 +355,7 @@ def test_confirmation_and_excel_export_are_single_owner_scoped_and_idempotent(
     assert sheet[2][18].value is None
     assert sheet[2][19].value is None
     assert sheet[2][22].value == draft.id
-    assert sheet[2][23].value == DEMO_RECORDS[0][0]
-    assert sheet[2][24].value == "Yes"
+    assert sheet[2][23].value == APPROVED_RECORDS[0][0]
+    assert sheet[2][24].value == "No"
     assert sheet[2][21].value == "Exported successfully"
     assert TABLE_NAME in sheet.tables

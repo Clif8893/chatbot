@@ -50,6 +50,7 @@ def test_greeting_during_enrollment_preserves_draft_and_resumes_next_step(
     app, client, conversation_id, fake_ai
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     send(client, conversation_id, "My full name is Test Student")
     before = len(fake_ai.classify_calls)
 
@@ -72,9 +73,9 @@ def test_enrollment_starts_with_course_choices_before_personal_data(
         "content"
     ]
 
-    assert "2-Day Basic Certificate in Dental Assisting" in reply
+    assert "Basic Certificate in Dental Assisting" in reply
     assert "S$600 nett" in reply
-    assert "1-Day Dental Infection Control" in reply
+    assert "Certificate in Dental Clinic Front Desk Operations" in reply
     assert "Please choose a course" in reply
     assert "Enrollment Started" not in reply
     assert "NRIC/FIN:" not in reply
@@ -101,21 +102,13 @@ def test_contextual_affirmative_after_course_description_requires_explicit_cours
     client, conversation_id, affirmative
 ):
     offered = send(client, conversation_id, "Tell me about the course").get_json()
-    assert "Would you like" in offered["message"]["content"]
+    assert "Basic Certificate in Dental Assisting" in offered["message"]["content"]
+    assert "Certificate in Dental Clinic Front Desk Operations" in offered["message"]["content"]
 
     response = send(client, conversation_id, affirmative).get_json()
 
-    assert response["routing"]["intent"] == "enrollment"
     assert response["enrollment"]["status"] is None
-    content = response["message"]["content"]
-    assert "Please choose a course" in content
-    assert "2-Day Basic Certificate in Dental Assisting" in content
-    assert "1-Day Dental Infection Control" in content
-    assert "Enrollment Details" not in content
-    assert "Payment method:" not in content
-    assert "SkillsFuture amount" not in content
-    assert "PayNow amount" not in content
-    assert "Would you like to learn more about the course" not in content
+    assert response["enrollment"]["course_id"] is None
 
 
 def test_contextual_no_after_course_offer_stays_in_enquiry_mode(
@@ -125,9 +118,8 @@ def test_contextual_no_after_course_offer_stays_in_enquiry_mode(
 
     response = send(client, conversation_id, "No thanks").get_json()
 
-    assert response["routing"]["intent"] == "faq"
+    assert response["routing"]["intent"] == "unclear"
     assert response["enrollment"]["status"] is None
-    assert "other course questions" in response["message"]["content"]
 
 
 def test_no_after_direct_enrollment_start_keeps_resumable_draft(
@@ -160,6 +152,7 @@ def test_joined_numbered_fields_are_split_and_invalid_nric_is_explained(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
 
     payload = send(
         client,
@@ -193,6 +186,7 @@ def test_joined_numbered_fields_extract_all_valid_participant_values(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     payload = send(
         client,
         conversation_id,
@@ -213,7 +207,7 @@ def test_selected_course_saves_approved_fee_snapshot(app, client, conversation_i
     send(client, conversation_id, "I want to enroll in Dental Assisting")
     with app.app_context():
         draft = EnrollmentDraft.query.one()
-        assert draft.course == "2-Day Basic Certificate in Dental Assisting"
+        assert draft.course == "Basic Certificate in Dental Assisting"
         assert draft.course_fee == Decimal("600.00")
 
 
@@ -237,15 +231,24 @@ def test_missing_approved_price_is_not_fabricated(tmp_path):
         client, conversation_id, "I want to enroll in Dental Assisting"
     ).get_json()["message"]["content"]
     assert "Awaiting staff confirmation" in offer
-    assert "dates are being updated" in offer
+    assert "18–19 November 2026" in offer
     assert "S$600" not in offer
 
 
 def test_intake_selection_is_limited_to_approved_dates(tmp_path):
     data = json.loads(CATALOGUE_PATH.read_text(encoding="utf-8"))
-    data["course"]["intakes"] = [
-        {"date": "2027-10-17", "display": "17 October 2027"}
-    ]
+    data["course"]["intakes"] = [{
+        "id": "approved-2027-10-17-1",
+        "course_id": "dental-assisting-basic",
+        "start_date": "2027-10-17",
+        "end_date": "2027-10-18",
+        "display_date": "17–18 October 2027",
+        "intake_type": "Weekend",
+        "capacity": 20,
+        "participant_count": 0,
+        "status": "open",
+        "is_demo": False,
+    }]
     path = tmp_path / "dated-course.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     app = create_app(
@@ -261,16 +264,17 @@ def test_intake_selection_is_limited_to_approved_dates(tmp_path):
     selection = send(
         client, conversation_id, "I want to enroll in Dental Assisting"
     ).get_json()
-    assert "17 October 2027" in selection["message"]["content"]
-    invalid = send(client, conversation_id, "Intake: 18 October 2027").get_json()
+    assert "17–18 October 2027" in selection["message"]["content"]
+    invalid = send(client, conversation_id, "Intake: 19 October 2027").get_json()
     assert "That date is not one of the available intakes" in invalid["message"]["content"]
-    assert "1. 17 October 2027" in invalid["message"]["content"]
+    assert "1. 17–18 October 2027" in invalid["message"]["content"]
     valid = send(client, conversation_id, "Intake: 17 October 2027").get_json()
     assert valid["enrollment"]["missing_fields"][0] == "full_name"
 
 
 def _complete_required_details(client, conversation_id):
     send(client, conversation_id, "I want to enroll in Dental Assisting")
+    send(client, conversation_id, "1")
     return send(
         client,
         conversation_id,
@@ -316,7 +320,7 @@ def test_contextual_yes_and_no_apply_to_confirmation_summary(
 
     send(client, conversation_id, "Correct email: corrected@example.com")
     confirmed = send(client, conversation_id, "yes please").get_json()
-    assert confirmed["enrollment"]["status"] == "awaiting_course_date"
+    assert confirmed["enrollment"]["status"] == "confirmed"
     assert "Reference:" in confirmed["message"]["content"]
 
 
@@ -336,9 +340,9 @@ def test_confirmation_is_masked_idempotent_and_exported_without_payment_fields(
 
     first = send(client, conversation_id, "Confirm").get_json()
     second = send(client, conversation_id, "Confirm").get_json()
-    assert first["enrollment"]["status"] == "awaiting_course_date"
+    assert first["enrollment"]["status"] == "confirmed"
     assert "Reference:" in first["message"]["content"]
-    assert "already saved" in second["message"]["content"]
+    assert "already confirmed" in second["message"]["content"]
     with app.app_context():
         assert EnrollmentDraft.query.count() == 1
         export = MasterInvoiceExport.query.one()

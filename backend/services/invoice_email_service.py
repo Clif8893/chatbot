@@ -43,7 +43,6 @@ ELIGIBLE_ENROLLMENT_STATUSES = {
     "receipt_issued",
 }
 INVOICE_EMAIL_TYPE = "invoice"
-COURSE_EMAIL_NAME = "2-Day Basic Certificate in Dental Assisting"
 
 
 class InvoiceEmailError(RuntimeError):
@@ -55,9 +54,10 @@ class ResendCooldownError(InvoiceEmailError):
 
 
 class InvoiceEmailService:
-    def __init__(self, delivery, invoice_templates):
+    def __init__(self, delivery, invoice_templates, catalogue=None):
         self.delivery = delivery
         self.invoice_templates = invoice_templates
+        self.catalogue = catalogue
 
     def queue_automatic(self, enrollment, generation):
         """Queue at most one automatic delivery for a generated PDF version."""
@@ -312,12 +312,19 @@ class InvoiceEmailService:
         recipient = self._recipient(recipient)
         pdf = _demo_pdf()
         invoice_number = f"DEMO-INV-LIVE-{utc_now():%Y%m%d%H%M%S}"
+        course = self.catalogue.course if self.catalogue is not None else {}
+        intakes = self.catalogue.approved_intakes if self.catalogue is not None else []
+        intake = intakes[0] if intakes else {}
         plain, html_body = self._render(
             first_name="John",
             invoice_number=invoice_number,
-            course="2-Day Basic Certificate in Dental Assisting",
-            intake="10–11 October 2026 — Development demonstration",
+            course=course.get("name") or "Approved course",
+            intake=(
+                f"{intake.get('display_date')} — {intake.get('intake_type')}"
+                if intake else "Awaiting staff confirmation"
+            ),
             development=True,
+            course_fee=course.get("fee", {}).get("display") or "Awaiting staff confirmation",
         )
         logo = self._logo()
         row = self.delivery.queue(
@@ -423,10 +430,8 @@ class InvoiceEmailService:
         course_text = (
             "\n".join(f"{row.position}. {row.course_name}" for row in courses)
             if len(courses) > 1
-            else (
-                COURSE_EMAIL_NAME
-                if "dental assisting" in str(enrollment.course or "").casefold()
-                else enrollment.course or COURSE_EMAIL_NAME
+            else enrollment.course or (
+                self.catalogue.course_name if self.catalogue is not None else "Approved course"
             )
         )
         intake_text = (
@@ -537,7 +542,8 @@ class InvoiceEmailService:
 
     @staticmethod
     def _render(
-        first_name, invoice_number, course, intake, development, course_fee="S$600 nett"
+        first_name, invoice_number, course, intake, development,
+        course_fee="Awaiting staff confirmation",
     ):
         warning = (
             "\nDevelopment demonstration only — this is not an official Q&M invoice.\n"
@@ -668,7 +674,7 @@ def _mask_email(value):
 
 def _course_fee_text(value):
     amount = Decimal(str(value or 0)).quantize(Decimal("0.01"))
-    rendered = f"{amount:.0f}" if amount == amount.to_integral() else f"{amount:.2f}"
+    rendered = f"{amount:,.0f}" if amount == amount.to_integral() else f"{amount:,.2f}"
     return f"S${rendered} nett"
 
 

@@ -68,6 +68,9 @@ class EnrollmentService:
         draft = conversation.enrollment_draft
         if draft is not None and draft.status == "discarded":
             draft = None
+        retired_reply = self.redirect_retired_draft(conversation, draft)
+        if retired_reply is not None:
+            return retired_reply, draft
         if draft is None or not ordered_courses(draft):
             initial_selection = self._handle_initial_course_selection(
                 conversation, draft, message
@@ -426,6 +429,15 @@ class EnrollmentService:
 
     def _save_initial_course_selection(self, conversation, selected):
         draft = self.repository.get_or_create_draft(conversation)
+        retired_rows = [
+            row
+            for row in draft.course_enrollments
+            if row.status == "retired_unavailable"
+        ]
+        for row in retired_rows:
+            db.session.delete(row)
+        if retired_rows:
+            db.session.flush()
         existing = {row.course_id for row in ordered_courses(draft)}
         for course in selected:
             if course["id"] not in existing:
@@ -437,6 +449,34 @@ class EnrollmentService:
         self._clear_course_choices(conversation)
         db.session.flush()
         return self._course_selection_progress(draft), draft
+
+    def redirect_retired_draft(self, conversation, draft):
+        """Keep particulars but require a fresh choice for a retired draft course."""
+        if draft is None or draft.confirmed_at:
+            return None
+        retired = [
+            row
+            for row in draft.course_enrollments
+            if row.status != "retired_unavailable"
+            and self.catalogue.course_for(row.course_id) is None
+        ]
+        if not retired:
+            return None
+        for row in retired:
+            if row.allocated_intake_id and self.intake_service is not None:
+                self.intake_service.release_course(row)
+            row.status = "retired_unavailable"
+        sync_registration(draft)
+        draft.status = "collecting"
+        draft.confirmed_at = None
+        self._set_validation_state(draft, "incomplete", ["course"])
+        conversation.pending_intake_options = None
+        self.remember_course_choices(conversation)
+        return (
+            "Your previously selected course is no longer available in the current "
+            "catalogue. Your valid participant particulars have been kept safely.\n\n"
+            + self._course_selection_reply()
+        )
 
     @staticmethod
     def _displayed_course_ids(conversation):
@@ -997,8 +1037,8 @@ class EnrollmentService:
                         "",
                         f"Course {row.position}",
                         "",
-                        f"- Course name: {row.course_name}",
-                        f"- Course code: {course.get('code') or 'Awaiting staff confirmation'}",
+                        f"- Course: {row.course_name}",
+                        f"- Duration: {course.get('duration') or 'Awaiting staff confirmation'}",
                         f"- Intake: {display_course_range(row)}",
                         f"- Course fee: {self.catalogue.course_fee_display_for(row.course_id)}",
                     ]
@@ -1024,7 +1064,7 @@ class EnrollmentService:
             course_code_line=f"\n- Course code: {code}" if code else "",
             course_fee=self._course_fee_display(draft),
             duration=course["duration"].capitalize(),
-            training_time=course["training_time"],
+            training_time=course.get("training_time") or "Awaiting staff confirmation",
             intake_label="Preferred intake",
             preferred_intake=self._intake_display(draft),
             demo_note="",
@@ -1645,11 +1685,13 @@ def _display_intake_range(start, end):
 def _display_amount(value):
     amount = Decimal(value or 0)
     if amount == amount.to_integral():
-        return f"S${amount:.0f}"
-    return f"S${amount:.2f}"
+        return f"S${amount:,.0f}"
+    return f"S${amount:,.2f}"
 
 
 def _display_time(value):
+    if value in (None, ""):
+        return "Awaiting staff confirmation"
     hour, minute = (int(part) for part in str(value).split(":")[:2])
     suffix = "am" if hour < 12 else "pm"
     display_hour = hour % 12 or 12

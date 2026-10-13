@@ -6,11 +6,11 @@ client calls a Flask REST API. Flask controls the workflow, CrewAI coordinates
 three OpenAI-backed agents, and SQLAlchemy preserves conversations and enrollment
 drafts across reloads and later days.
 
-The course catalogue uses the latest supplied company reply information. Approved
-client intake dates remain empty until staff add them. Three fictional prototype
-intakes are seeded idempotently into the existing staff-managed course-date table.
-They appear by default in local development and only when
-`ENABLE_DEMO_INTAKES=true`.
+The central catalogue contains the planned integrated versions of two courses:
+Basic Certificate in Dental Assisting (S$600 nett) and Certificate in Dental
+Clinic Front Desk Operations (S$450 nett). Their six approved November 2026 to
+February 2027 intakes are seeded idempotently into the staff-managed course-date
+table. Obsolete demo rows are retained for history but retired from selection.
 Automated tests use only synthetic identities.
 
 ## Current Phase
@@ -19,8 +19,8 @@ The current implementation includes:
 
 - Intent classification into `faq`, `enrollment`, or `unclear`
 - A grounded FAQ/Enquiry Agent using editable company course information
-- An Enrollment Agent that collects identity, contact, intake, payment-option,
-  SkillsFuture amount, and PayNow amount details
+- An Enrollment Agent that collects selected course(s), one intake per course,
+  name, NRIC/FIN, date of birth, email, and mobile number
 - Deterministic Python validation and explicit confirmation before saving
 - An additive enrollment-schema migration that preserves existing records
 - Participant registration, login, protected chat, and account-owned conversations
@@ -120,10 +120,9 @@ MAXIMUM_ENROLLMENT_AGE=100
 ENROLLMENT_TIMEZONE=Asia/Singapore
 ```
 
-`ENABLE_DEMO_INTAKES` defaults to `true` for local development and is forced off
-in production. Set it to `false` locally when an empty staff-maintained schedule
-is required. The displayed October and November 2026 dates are fictional, are
-visibly marked as demo dates, and are not confirmed Q&M course intakes.
+`ENABLE_DEMO_INTAKES` remains available for archived compatibility fixtures, but
+the current six planned intakes are approved catalogue rows and do not depend on
+that flag. The seed process preserves participant counts and configured capacity.
 
 The configured age range is deterministic development validation because the
 supplied company documents do not state a minimum enrollment age. Q&M must
@@ -177,7 +176,7 @@ Accounting staff can download, regenerate, or retry failed exports from the
 Accounts portal. To recover the workbook entirely from validated SQL records:
 
 ```powershell
-Set-Location "C:\FYP-DENTAL AI CHATBOT"
+Set-Location "C:\qm_agentic_course_agent_dhiraj"
 $env:FLASK_APP="backend.app:app"
 python -m flask rebuild-master-invoice
 ```
@@ -201,7 +200,7 @@ Copy the blank email settings from `backend/.env.example` into the ignored local
 Gmail password. Process pending invoice-email jobs with:
 
 ```powershell
-Set-Location "C:\FYP-DENTAL AI CHATBOT"
+Set-Location "C:\qm_agentic_course_agent_dhiraj"
 .\backend\.venv\Scripts\python.exe -m flask --app backend.app process-invoice-emails
 ```
 

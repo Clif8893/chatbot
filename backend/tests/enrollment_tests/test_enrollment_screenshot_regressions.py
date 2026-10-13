@@ -76,6 +76,7 @@ def test_multi_field_sentence_saves_only_clean_name_and_email(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enrol in Dental Assisting.")
+    send(client, conversation_id, "1")
     response = send(
         client,
         conversation_id,
@@ -93,6 +94,7 @@ def test_malformed_later_name_does_not_replace_saved_valid_name(
     app, client, conversation_id
 ):
     send(client, conversation_id, "I want to enrol in Dental Assisting.")
+    send(client, conversation_id, "1")
     send(client, conversation_id, "Full name: Test Student")
     send(
         client,

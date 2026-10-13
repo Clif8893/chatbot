@@ -31,11 +31,11 @@ def _start_both(client):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     opening = send(client, conversation_id, "I want to enrol").get_json()
     assert opening["enrollment"]["course_id"] is None
-    assert "1. 2-Day Basic Certificate" in opening["message"]["content"]
+    assert "1. Basic Certificate in Dental Assisting" in opening["message"]["content"]
     selected = send(client, conversation_id, "both").get_json()
     assert [row["course_id"] for row in selected["enrollment"]["courses"]] == [
         "dental-assisting-basic",
-        "dental-infection-control",
+        "dental-clinic-front-desk-operations",
     ]
     return conversation_id, selected
 
@@ -60,7 +60,7 @@ def _complete_both(client, conversation_id):
     (
         "both",
         "1 and 2",
-        "Dental Assisting and Infection Control",
+        "Dental Assisting and Front Desk Operations",
     ),
 )
 def test_two_course_phrases_store_two_unique_canonical_ids_in_order(
@@ -75,7 +75,7 @@ def test_two_course_phrases_store_two_unique_canonical_ids_in_order(
 
     assert [row["course_id"] for row in payload["enrollment"]["courses"]] == [
         "dental-assisting-basic",
-        "dental-infection-control",
+        "dental-clinic-front-desk-operations",
     ]
     with app.app_context():
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
@@ -108,9 +108,9 @@ def test_two_course_intakes_summary_and_confirmation_are_grouped_and_idempotent(
     assert ready["enrollment"]["status"] == "awaiting_confirmation"
     content = ready["message"]["content"]
     assert "review both course enrollments" in content.casefold()
-    assert "2-Day Basic Certificate in Dental Assisting" in content
-    assert "1-Day Dental Infection Control" in content
-    assert "Total amount due: S$950 nett" in content
+    assert "Basic Certificate in Dental Assisting" in content
+    assert "Certificate in Dental Clinic Front Desk Operations" in content
+    assert "Total amount due: S$1,050 nett" in content
     assert not any(
         phrase in content
         for phrase in ("Payment method", "PayNow amount", "SkillsFuture amount")
@@ -123,7 +123,7 @@ def test_two_course_intakes_summary_and_confirmation_are_grouped_and_idempotent(
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
-        assert draft.course_fee == Decimal("950.00")
+        assert draft.course_fee == Decimal("1050.00")
         assert len(rows) == 2
         assert all(row.status == "confirmed" for row in rows)
         assert len({row.id for row in rows}) == 2
@@ -141,13 +141,13 @@ def test_each_course_only_shows_and_accepts_its_own_intakes(tmp_path, fake_ai):
     client = authenticated_client(app)
     conversation_id, selected = _start_both(client)
     first_content = selected["message"]["content"]
-    assert "10–11 October 2026" in first_content
-    assert "18 October 2026" not in first_content
+    assert "18–19 November 2026" in first_content
+    assert "2 December 2026" not in first_content
 
     next_course = send(client, conversation_id, "1").get_json()["message"]["content"]
-    assert "18 October 2026" in next_course
+    assert "2 December 2026" in next_course
     available_intakes = next_course.split("Available Intake Dates", 1)[1]
-    assert "10–11 October 2026" not in available_intakes
+    assert "18–19 November 2026" not in available_intakes
 
 
 def test_group_state_persists_in_previous_chat_history(tmp_path, fake_ai):
@@ -160,7 +160,7 @@ def test_group_state_persists_in_previous_chat_history(tmp_path, fake_ai):
 
     assert [row["course_id"] for row in reloaded["enrollment"]["courses"]] == [
         "dental-assisting-basic",
-        "dental-infection-control",
+        "dental-clinic-front-desk-operations",
     ]
     assert reloaded["enrollment"]["courses"][0]["selected_intake"] is not None
     assert reloaded["enrollment"]["courses"][1]["selected_intake"] is None
