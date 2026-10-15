@@ -15,6 +15,9 @@ from backend.models.finance import CreditNoteRequest, FinanceCase, MasterInvoice
 from backend.models.operations import AuditEvent, CourseDate, StaffEscalation
 from backend.services.enrollment.enrollment_management_service import (
     AWAITING_CANCELLATION,
+    AWAITING_CHANGE_SELECTION,
+    AWAITING_COURSE_CHANGE_INTAKE,
+    AWAITING_COURSE_CHANGE_SELECTION,
     AWAITING_RESCHEDULE_CONFIRMATION,
     AWAITING_RESCHEDULE_SELECTION,
 )
@@ -335,6 +338,191 @@ def test_cross_user_cannot_cancel_or_view_another_enrollment(tmp_path, fake_ai):
         assert db.session.get(EnrollmentDraft, draft_id).status == "confirmed"
 
 
+def test_exact_change_menu_and_intake_flow_survives_course_change(
+    tmp_path, fake_ai
+):
+    app = management_app(tmp_path, fake_ai, "exact-change-flow.db")
+    client = authenticated_client(app)
+    conversation_id, draft_id = add_confirmed(app, client)
+    with app.app_context():
+        draft = db.session.get(EnrollmentDraft, draft_id)
+        draft.friendly_reference = "ENR-2026-000777"
+        app.extensions["master_invoice"].export_confirmed_enrollment(draft_id)
+        db.session.commit()
+
+    alias = send(client, conversation_id, "Reschedule enrollment.").get_json()
+    assert "That date is not one of" not in alias["message"]["content"]
+    assert "28–29 November 2026" in alias["message"]["content"]
+    assert "18–19 November 2026" not in alias["message"]["content"]
+    send(client, conversation_id, "Keep enrollment")
+
+    with app.app_context():
+        conversation = db.session.get(Conversation, conversation_id)
+        conversation.pending_intake_options = ["dental-assisting-2026-11-18"]
+        db.session.commit()
+
+    menu = send(client, conversation_id, "Change enrollment.").get_json()
+    assert "1. Participant details" in menu["message"]["content"]
+    with app.app_context():
+        conversation = db.session.get(Conversation, conversation_id)
+        assert conversation.pending_action == AWAITING_CHANGE_SELECTION
+        assert conversation.pending_intake_options is None
+
+    alternatives = send(client, conversation_id, "3").get_json()
+    assert "28–29 November 2026" in alternatives["message"]["content"]
+    assert "18–19 November 2026" not in alternatives["message"]["content"]
+    summary = send(client, conversation_id, "1").get_json()
+    content = summary["message"]["content"]
+    assert f"- Course: {COURSE}" in content
+    assert "- Current intake: 18–19 November 2026" in content
+    assert "- New intake: 28–29 November 2026" in content
+    assert "Confirm change" in content and "Keep enrollment" in content
+
+    changed = send(client, conversation_id, "Confirm change").get_json()
+    assert "28–29 November 2026" in changed["message"]["content"]
+    with app.app_context():
+        draft = db.session.get(EnrollmentDraft, draft_id)
+        conversation = db.session.get(Conversation, conversation_id)
+        assert draft.friendly_reference == "ENR-2026-000777"
+        assert draft.intake_id == "dental-assisting-2026-11-28"
+        assert db.session.get(CourseDate, "dental-assisting-2026-11-18").participant_count == 0
+        assert db.session.get(CourseDate, "dental-assisting-2026-11-28").participant_count == 1
+        assert MasterInvoiceExport.query.filter_by(enrollment_id=draft_id).count() == 1
+        assert conversation.pending_action is None
+        assert conversation.pending_intake_options is None
+        assert conversation.pending_change_data is None
+
+    send(client, conversation_id, "Change enrollment")
+    course_menu = send(client, conversation_id, "2").get_json()
+    assert "Please choose the new course" in course_menu["message"]["content"]
+    course_intakes = send(client, conversation_id, "2").get_json()
+    assert "Front Desk Operations" in course_intakes["message"]["content"]
+    send(client, conversation_id, "1")
+    send(client, conversation_id, "Confirm change")
+
+    send(client, conversation_id, "Change enrollment")
+    front_desk_alternatives = send(client, conversation_id, "3").get_json()
+    front_desk_content = front_desk_alternatives["message"]["content"]
+    assert "9 January 2027" in front_desk_content
+    assert "3 February 2027" in front_desk_content
+    assert "2 December 2026" not in front_desk_content
+    with app.app_context():
+        assert db.session.get(Conversation, conversation_id).pending_intake_options == [
+            "front-desk-operations-2027-01-09",
+            "front-desk-operations-2027-02-03",
+        ]
+
+
+def test_legacy_reschedule_alias_and_confirmation_phrase_remain_accepted(
+    tmp_path, fake_ai
+):
+    app = management_app(tmp_path, fake_ai, "legacy-reschedule-alias.db")
+    client = authenticated_client(app)
+    conversation_id, draft_id = add_confirmed(app, client)
+
+    choices = send(client, conversation_id, "Reschedule enrollment").get_json()
+    assert "28–29 November 2026" in choices["message"]["content"]
+    summary = send(client, conversation_id, "1").get_json()
+    assert "Confirm change" in summary["message"]["content"]
+    assert "Confirm reschedule" not in summary["message"]["content"]
+    result = send(client, conversation_id, "Confirm reschedule").get_json()
+
+    assert "has been changed" in result["message"]["content"]
+    with app.app_context():
+        assert db.session.get(EnrollmentDraft, draft_id).intake_id == "dental-assisting-2026-11-28"
+        assert db.session.get(Conversation, conversation_id).pending_action is None
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected_state", "expected_copy"),
+    [
+        ("1", AWAITING_CHANGE_SELECTION, "Change my email"),
+        ("2", AWAITING_COURSE_CHANGE_SELECTION, "Please choose the new course"),
+        ("3", AWAITING_RESCHEDULE_SELECTION, "Available Intakes"),
+        ("4", AWAITING_CANCELLATION, "Confirm cancellation"),
+    ],
+)
+def test_change_menu_numbers_are_locked_to_the_displayed_menu(
+    tmp_path, fake_ai, choice, expected_state, expected_copy
+):
+    app = management_app(tmp_path, fake_ai, f"menu-choice-{choice}.db")
+    client = authenticated_client(app)
+    conversation_id, _ = add_confirmed(app, client)
+    send(client, conversation_id, "Change enrollment")
+
+    response = send(client, conversation_id, choice).get_json()
+
+    assert expected_copy in response["message"]["content"]
+    with app.app_context():
+        assert db.session.get(Conversation, conversation_id).pending_action == expected_state
+
+
+def test_keep_enrollment_clears_each_change_stage_without_mutation(tmp_path, fake_ai):
+    app = management_app(tmp_path, fake_ai, "keep-every-stage.db")
+    client = authenticated_client(app)
+    conversation_id, draft_id = add_confirmed(app, client)
+
+    stage_commands = [
+        ("Change enrollment", None),
+        ("Change enrollment", "2"),
+        ("Change enrollment", ("2", "2")),
+        ("Change enrollment", "3"),
+        ("Change enrollment", ("3", "1")),
+    ]
+    for opener, selections in stage_commands:
+        send(client, conversation_id, opener)
+        for selection in (() if selections is None else selections if isinstance(selections, tuple) else (selections,)):
+            send(client, conversation_id, selection)
+        kept = send(client, conversation_id, "Keep enrollment").get_json()
+        assert "unchanged" in kept["message"]["content"]
+        with app.app_context():
+            assert db.session.get(Conversation, conversation_id).pending_action is None
+            assert db.session.get(EnrollmentDraft, draft_id).intake_id == "dental-assisting-2026-11-18"
+
+
+def test_change_menu_and_intake_stage_survive_faq_and_backend_restart(
+    tmp_path, fake_ai
+):
+    database_name = "change-menu-restart.db"
+    app = management_app(tmp_path, fake_ai, database_name)
+    client = authenticated_client(app, email="change-menu-restart@example.com")
+    conversation_id, _ = add_confirmed(app, client)
+    send(client, conversation_id, "Change enrollment")
+    faq = send(client, conversation_id, "Can I use SkillsFuture Credits?").get_json()
+    assert "SkillsFuture" in faq["message"]["content"]
+    with app.app_context():
+        assert db.session.get(Conversation, conversation_id).pending_action == AWAITING_CHANGE_SELECTION
+    refreshed = client.get(f"/api/conversations/{conversation_id}/messages")
+    assert refreshed.status_code == 200
+    assert client.post("/api/auth/logout").status_code == 200
+
+    restarted = management_app(tmp_path, fake_ai, database_name)
+    resumed = restarted.test_client()
+    login = resumed.post(
+        "/api/auth/login",
+        json={"email": client.test_email, "password": client.test_password},
+    ).get_json()
+    response = resumed.post(
+        "/api/chat",
+        json={"conversation_id": conversation_id, "message": "3"},
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    ).get_json()
+    assert "28–29 November 2026" in response["message"]["content"]
+    faq = resumed.post(
+        "/api/chat",
+        json={"conversation_id": conversation_id, "message": "What is the course fee?"},
+        headers={"X-CSRF-Token": login["csrf_token"]},
+    ).get_json()
+    assert "$600 nett" in faq["message"]["content"]
+    with restarted.app_context():
+        conversation = db.session.get(Conversation, conversation_id)
+        assert conversation.pending_action == AWAITING_RESCHEDULE_SELECTION
+        assert conversation.pending_intake_options == [
+            "dental-assisting-2026-11-28",
+            "dental-assisting-2026-12-16",
+        ]
+
+
 def test_unique_month_reschedule_resolves_to_matching_intake(
     tmp_path, fake_ai
 ):
@@ -344,10 +532,10 @@ def test_unique_month_reschedule_resolves_to_matching_intake(
     response = send(client, conversation_id, "Change me to the November intake").get_json()
     content = response["message"]["content"]
     assert "Available November Intakes" in content
-    assert "18–19 November 2026" in content
     assert "28–29 November 2026" in content
+    assert "18–19 November 2026" not in content
     assert "10–11 October" not in content
-    selected = send(client, conversation_id, "2").get_json()
+    selected = send(client, conversation_id, "1").get_json()
     assert "28–29 November 2026" in selected["message"]["content"]
     with app.app_context():
         conversation = db.session.get(Conversation, conversation_id)
@@ -361,7 +549,7 @@ def test_unique_month_reschedule_resolves_to_matching_intake(
     ("message", "target_id"),
     [
         ("Change my course to 28 November", "dental-assisting-2026-11-28"),
-        ("Move me to the third option", "dental-assisting-2026-12-16"),
+        ("Move me to the second option", "dental-assisting-2026-12-16"),
     ],
 )
 def test_reschedule_selection_by_date_or_option_requires_confirmation(
@@ -371,7 +559,7 @@ def test_reschedule_selection_by_date_or_option_requires_confirmation(
     client = authenticated_client(app)
     conversation_id, draft_id = add_confirmed(app, client)
     response = send(client, conversation_id, message).get_json()
-    assert "Confirm reschedule" in response["message"]["content"]
+    assert "Confirm change" in response["message"]["content"]
     with app.app_context():
         assert db.session.get(EnrollmentDraft, draft_id).intake_id == "dental-assisting-2026-11-18"
         assert db.session.get(Conversation, conversation_id).pending_target_intake_id == target_id
@@ -423,7 +611,7 @@ def test_target_becoming_full_preserves_original_intake(tmp_path, fake_ai):
         target = db.session.get(CourseDate, "dental-assisting-2026-11-28")
         target.participant_count = target.capacity
         db.session.commit()
-    response = send(client, conversation_id, "Confirm reschedule").get_json()
+    response = send(client, conversation_id, "Confirm change").get_json()
     assert "full" in response["message"]["content"].casefold()
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
@@ -441,9 +629,9 @@ def test_confirmed_reschedule_moves_one_place_and_updates_same_excel_row(tmp_pat
         assert service.export_confirmed_enrollment(draft_id)
         invoice_number = MasterInvoiceExport.query.one().invoice_number
     send(client, conversation_id, "Reschedule my enrollment to 16 December")
-    response = send(client, conversation_id, "Confirm reschedule").get_json()
-    assert "rescheduled" in response["message"]["content"].casefold()
-    send(client, conversation_id, "Confirm reschedule")
+    response = send(client, conversation_id, "Confirm change").get_json()
+    assert "has been changed" in response["message"]["content"].casefold()
+    send(client, conversation_id, "Confirm change")
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         assert draft.intake_id == "dental-assisting-2026-12-16"
@@ -480,7 +668,7 @@ def test_pending_reschedule_survives_restart_logout_and_login(tmp_path, fake_ai)
     token = login.get_json()["csrf_token"]
     response = resumed.post(
         "/api/chat",
-        json={"conversation_id": conversation_id, "message": "Confirm reschedule"},
+        json={"conversation_id": conversation_id, "message": "Confirm change"},
         headers={"X-CSRF-Token": token},
     )
     assert response.status_code == 200
@@ -509,6 +697,7 @@ def test_faq_interruption_preserves_pending_action_and_new_chat_does_not_inherit
         "Can I use Mid-Career SkillsFuture Credits?",
     ).get_json()
     assert "You cannot use Midcareer Skillsfuture Credit" in faq["message"]["content"]
+    assert "Front Desk Operations" not in faq["message"]["content"]
     with app.app_context():
         assert db.session.get(Conversation, conversation_id).pending_action == AWAITING_CANCELLATION
 
@@ -538,8 +727,8 @@ def test_excel_failure_after_reschedule_keeps_database_change_and_retry_state(
         "_atomic_save",
         lambda workbook: (_ for _ in ()).throw(PermissionError("locked")),
     )
-    response = send(client, conversation_id, "Confirm reschedule").get_json()
-    assert "rescheduled" in response["message"]["content"].casefold()
+    response = send(client, conversation_id, "Confirm change").get_json()
+    assert "has been changed" in response["message"]["content"].casefold()
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         record = MasterInvoiceExport.query.one()
@@ -553,7 +742,7 @@ def test_staff_serialization_shows_management_history_without_full_nric(tmp_path
     client = authenticated_client(app)
     conversation_id, draft_id = add_confirmed(app, client)
     send(client, conversation_id, "Change my intake to 28 November")
-    send(client, conversation_id, "Confirm reschedule")
+    send(client, conversation_id, "Confirm change")
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         row = app.extensions["finance"].serialize_enrollment(draft)
@@ -582,7 +771,7 @@ def test_status_queries_are_deterministic_accurate_and_private(tmp_path, fake_ai
     assert response["routing"]["intent"] == "enrollment"
 
     send(client, conversation_id, "Change my intake to 16 December")
-    send(client, conversation_id, "Confirm reschedule")
+    send(client, conversation_id, "Confirm change")
     updated = send(client, conversation_id, "Did my reschedule work?").get_json()
     assert "16–17 December 2026" in updated["message"]["content"]
 
@@ -613,8 +802,8 @@ def test_draft_and_cancelled_status_are_accurate(tmp_path, fake_ai):
     send(client, confirmed_conversation, "Cancel my enrollment")
     send(client, confirmed_conversation, "Confirm cancellation")
     cancelled = send(client, confirmed_conversation, "Is my enrollment cancelled?").get_json()
-    assert "Status: Cancelled" in cancelled["message"]["content"]
-    assert "Previous intake" in cancelled["message"]["content"]
+    assert "No saved enrollment was found" in cancelled["message"]["content"]
+    assert "Cancelled" not in cancelled["message"]["content"]
 
 
 @pytest.mark.parametrize(
@@ -636,7 +825,9 @@ def test_natural_status_variants_bypass_ai(tmp_path, fake_ai, question):
     assert len(fake_ai.classify_calls) == before
 
 
-def test_multiple_enrollments_require_safe_conversation_selection(tmp_path, fake_ai):
+def test_multiple_current_confirmed_enrollments_display_without_legacy_dump(
+    tmp_path, fake_ai
+):
     app = management_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     add_confirmed(app, client, "dental-assisting-2026-11-18", name="First Student")
@@ -644,9 +835,107 @@ def test_multiple_enrollments_require_safe_conversation_selection(tmp_path, fake
     new_conversation = client.post("/api/conversations").get_json()["conversation_id"]
     response = send(client, new_conversation, "Show my registration details").get_json()
     content = response["message"]["content"]
-    assert "Your Enrollments" in content
-    assert "Please open the relevant previous chat" in content
+    assert "Confirmed enrollments" in content
+    assert "18–19 November 2026" in content
+    assert "28–29 November 2026" in content
+    assert "Please open the relevant previous chat" not in content
     assert "S1234567D" not in content
+
+
+def test_status_excludes_unrelated_incomplete_obsolete_cancelled_and_duplicates(
+    tmp_path, fake_ai
+):
+    app = management_app(tmp_path, fake_ai, "filtered-status.db")
+    client = authenticated_client(app)
+    first_conversation, first_id = add_confirmed(
+        app, client, "dental-assisting-2026-11-18", name="Private First"
+    )
+    add_confirmed(app, client, "dental-assisting-2026-11-28", name="Private Second")
+    current_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    unrelated_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    obsolete_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    cancelled_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    discarded_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    duplicate_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+
+    with app.app_context():
+        current = db.session.get(Conversation, current_conversation)
+        unrelated = db.session.get(Conversation, unrelated_conversation)
+        obsolete = db.session.get(Conversation, obsolete_conversation)
+        cancelled = db.session.get(Conversation, cancelled_conversation)
+        discarded = db.session.get(Conversation, discarded_conversation)
+        duplicate = db.session.get(Conversation, duplicate_conversation)
+        first = db.session.get(EnrollmentDraft, first_id)
+        db.session.add_all(
+            [
+                EnrollmentDraft(
+                    conversation=current,
+                    course_id="dental-assisting-basic",
+                    course=COURSE,
+                    full_name="Current Private Name",
+                    nric="S1234567D",
+                    email="current.private@example.com",
+                    status="collecting",
+                ),
+                EnrollmentDraft(
+                    conversation=unrelated,
+                    course_id="dental-assisting-basic",
+                    course=COURSE,
+                    full_name="Unrelated Private Name",
+                    status="collecting",
+                ),
+                EnrollmentDraft(
+                    conversation=obsolete,
+                    course_id="dental-infection-control",
+                    course="1-Day Dental Infection Control & Sterilisation Workshop",
+                    status="confirmed",
+                    confirmed_at=utc_now(),
+                ),
+                EnrollmentDraft(
+                    conversation=cancelled,
+                    course_id="dental-assisting-basic",
+                    course=COURSE,
+                    status="cancelled",
+                    confirmed_at=utc_now(),
+                ),
+                EnrollmentDraft(
+                    conversation=discarded,
+                    course_id="dental-assisting-basic",
+                    course=COURSE,
+                    status="discarded",
+                    friendly_reference="DISCARDED-REF",
+                ),
+                EnrollmentDraft(
+                    conversation=duplicate,
+                    course_id="dental-assisting-basic",
+                    course=COURSE,
+                    course_fee=Decimal("600"),
+                    intake_id=first.intake_id,
+                    preferred_intake_date=first.preferred_intake_date,
+                    intake_start_date=first.intake_start_date,
+                    intake_end_date=first.intake_end_date,
+                    status="confirmed",
+                    confirmed_at=utc_now(),
+                ),
+            ]
+        )
+        db.session.commit()
+
+    payload = send(client, current_conversation, "What is my enrollment status?").get_json()
+    content = payload["message"]["content"]
+
+    assert content.count("Basic Certificate in Dental Assisting") == 3
+    assert "18–19 November 2026" in content
+    assert "28–29 November 2026" in content
+    assert "Current draft" in content
+    assert "Dental Infection Control" not in content
+    assert "Cancelled" not in content
+    assert "DISCARDED-REF" not in content
+    assert "Unrelated Private Name" not in content
+    assert "Current Private Name" not in content
+    assert "S1234567D" not in content
+    assert "current.private@example.com" not in content
+    assert "Reference pending" not in content
 
 
 def test_concurrent_allocations_cannot_overbook_target(tmp_path, fake_ai):

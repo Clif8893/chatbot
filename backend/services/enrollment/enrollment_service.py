@@ -1634,7 +1634,6 @@ class EnrollmentService:
         return (
             "\n\nNeed to make a change?\n\n"
             "- Reply “Change enrollment” to update eligible enrollment details.\n"
-            "- Reply “Reschedule enrollment” to select another available intake.\n"
             "- Reply “Cancel enrollment” to request cancellation.\n"
             "- Reply “Resend invoice” if you need the invoice emailed again.\n"
             "- Reply “Enrollment status” to view your current status."

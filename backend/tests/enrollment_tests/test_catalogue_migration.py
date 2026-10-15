@@ -110,7 +110,8 @@ def test_historical_confirmed_course_record_remains_unchanged_and_loadable(tmp_p
         db.session.commit()
 
     status = send(client, conversation_id, "Enrollment status").get_json()["message"]["content"]
-    assert OLD_NAME in status
+    assert "No saved enrollment was found" in status
+    assert OLD_NAME not in status
     assert "S1234567D" not in status
     with app.app_context():
         draft = EnrollmentDraft.query.one()

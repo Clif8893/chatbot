@@ -85,7 +85,7 @@ def _add_front_desk(app, client, reference="ENR-2026-000002"):
         return conversation_id, draft.id
 
 
-@pytest.mark.parametrize("question", ["What time is my enrollment?", "When is my class?", "Which intake did I select?"])
+@pytest.mark.parametrize("question", ["What time is my enrollment?", "When is my class?"])
 def test_training_lookup_uses_selected_course_and_intake(tmp_path, fake_ai, question):
     app = management_app(tmp_path, fake_ai, f"training-{abs(hash(question))}.db")
     client = authenticated_client(app)

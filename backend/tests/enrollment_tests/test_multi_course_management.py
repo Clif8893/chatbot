@@ -6,6 +6,10 @@ from backend.extensions import db
 from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft
 from backend.models.finance import MasterInvoiceExport
 from backend.models.operations import CourseDate
+from backend.services.enrollment.enrollment_management_service import (
+    AWAITING_RESCHEDULE_COURSE_SELECTION,
+    AWAITING_RESCHEDULE_SELECTION,
+)
 from backend.tests.conftest import authenticated_client, send
 from backend.tests.enrollment_tests.test_multi_course_enrollment import (
     _app,
@@ -181,7 +185,7 @@ def test_new_chat_does_not_duplicate_already_held_course_and_can_add_other(
         assert pending.pending_enrollment_id == EnrollmentDraft.query.one().id
 
 
-def test_group_status_shows_active_and_cancelled_courses_with_current_invoice(
+def test_group_status_excludes_cancelled_course_and_keeps_current_invoice(
     tmp_path, fake_ai
 ):
     app = _app(tmp_path, fake_ai)
@@ -197,8 +201,10 @@ def test_group_status_shows_active_and_cancelled_courses_with_current_invoice(
     )
     status = send(client, conversation_id, "Which courses am I registered for?").get_json()
     content = status["message"]["content"]
-    assert "Course 1:" in content and "Status: Confirmed" in content
-    assert "Course 2:" in content and "Status: Cancelled" in content
+    assert "Basic Certificate in Dental Assisting" in content
+    assert "Confirmed" in content
+    assert "Certificate in Dental Clinic Front Desk Operations" not in content
+    assert "Cancelled" not in content
     assert "Invoice number:" in content
     assert "Current invoice total: S$600.00" in content
     assert "S1234567D" not in content
@@ -208,6 +214,43 @@ def test_group_status_shows_active_and_cancelled_courses_with_current_invoice(
         len(fake_ai.faq_calls),
         len(fake_ai.enrollment_calls),
     )
+
+
+def test_group_intake_change_asks_for_course_before_listing_alternatives(
+    tmp_path, fake_ai
+):
+    app = _app(tmp_path, fake_ai)
+    client = authenticated_client(app, "group-intake-change@example.com")
+    conversation_id = _confirm_both(client)
+    with app.app_context():
+        rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
+        current_front_desk_id = rows[1].intake_id
+
+    send(client, conversation_id, "Change enrollment")
+    course_prompt = send(client, conversation_id, "3").get_json()
+    content = course_prompt["message"]["content"]
+    assert "Which course intake would you like to change?" in content
+    assert "Basic Certificate in Dental Assisting" in content
+    assert "Front Desk Operations" in content
+    with app.app_context():
+        assert db.session.get(Conversation, conversation_id).pending_action == AWAITING_RESCHEDULE_COURSE_SELECTION
+
+    alternatives = send(client, conversation_id, "2").get_json()
+    content = alternatives["message"]["content"]
+    assert "9 January 2027" in content
+    assert "3 February 2027" in content
+    assert "2 December 2026" not in content
+    with app.app_context():
+        conversation = db.session.get(Conversation, conversation_id)
+        assert conversation.pending_action == AWAITING_RESCHEDULE_SELECTION
+        assert current_front_desk_id not in conversation.pending_intake_options
+
+    kept = send(client, conversation_id, "Keep enrollment").get_json()
+    assert "unchanged" in kept["message"]["content"]
+    with app.app_context():
+        rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
+        assert rows[1].intake_id == current_front_desk_id
+        assert db.session.get(Conversation, conversation_id).pending_action is None
 
 
 def test_whole_group_cancellation_still_cancels_both_courses_safely(

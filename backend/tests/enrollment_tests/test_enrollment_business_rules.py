@@ -254,10 +254,10 @@ def test_confirmed_intake_change_moves_exactly_one_place(tmp_path, fake_ai):
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     _ready_for_confirmation(client, conversation_id)
     send(client, conversation_id, "Confirm")
-    changed = send(client, conversation_id, "Change my intake to the third option").get_json()
+    changed = send(client, conversation_id, "Change my intake to the second option").get_json()
     assert changed["enrollment"]["selected_intake"]["id"] == "dental-assisting-2026-11-18"
-    assert "Confirm reschedule" in changed["message"]["content"]
-    send(client, conversation_id, "Confirm reschedule")
+    assert "Confirm change" in changed["message"]["content"]
+    send(client, conversation_id, "Confirm change")
     with app.app_context():
         first = db.session.get(CourseDate, "dental-assisting-2026-11-18")
         third = db.session.get(CourseDate, "dental-assisting-2026-12-16")

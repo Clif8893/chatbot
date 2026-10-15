@@ -17,6 +17,7 @@ from backend.models.finance import (
 from backend.services.invoice_email_service import InvoiceEmailError, ResendCooldownError
 from backend.models.operations import AuditEvent, CourseDate, StaffEscalation
 from backend.services.conversation_repository import archive_discarded_draft
+from backend.services.inquiry_intents import is_career_question
 from backend.services.privacy import mask_nric, mask_nrics_in_text
 from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
 from backend.services.enrollment.validation import validate_field
@@ -36,8 +37,10 @@ AWAITING_DRAFT_DISCARD = "awaiting_draft_discard_confirmation"
 AWAITING_RESCHEDULE_SELECTION = "awaiting_reschedule_selection"
 AWAITING_RESCHEDULE_CONFIRMATION = "awaiting_reschedule_confirmation"
 AWAITING_INVOICE_RESEND = "awaiting_invoice_resend_confirmation"
-AWAITING_CHANGE_SELECTION = "awaiting_change_selection"
+AWAITING_CHANGE_SELECTION = "change_enrollment_menu"
+LEGACY_AWAITING_CHANGE_SELECTION = "awaiting_change_selection"
 AWAITING_CHANGE_CONFIRMATION = "awaiting_change_confirmation"
+AWAITING_RESCHEDULE_COURSE_SELECTION = "awaiting_intake_change_course_selection"
 AWAITING_COURSE_CHANGE_SELECTION = "awaiting_course_change_selection"
 AWAITING_COURSE_CHANGE_INTAKE = "awaiting_course_change_intake"
 AWAITING_COURSE_CANCELLATION_SELECTION = "cancel_course_selection"
@@ -237,61 +240,9 @@ class EnrollmentManagementService:
             if _confirms_resend(text):
                 return self._confirm_invoice_resend(conversation)
 
-        if state == AWAITING_CHANGE_SELECTION:
-            if _keeps_enrollment(text):
-                draft = self._pending_owned_draft(conversation)
-                self._clear_pending(conversation)
-                db.session.commit()
-                return ManagementResult(
-                    "No problem — your enrollment remains unchanged.",
-                    draft,
-                    "change_kept",
-                )
-            option = _change_option(text)
-            direct = self._prepare_confirmed_change(conversation, text)
-            if direct is not None:
-                return direct
-            self._clear_pending(conversation)
-            if option == "intake":
-                return self._request_reschedule(conversation, text)
-            if option == "course":
-                return self._request_course_change(conversation, "")
-            if option == "cancel":
-                return self._request_cancellation(conversation, text)
-            if option:
-                draft = self._current_or_single(conversation)
-                db.session.commit()
-                return ManagementResult(
-                    "Please provide the new value clearly, for example “Change my email "
-                    "to name@example.com”. I’ll validate it and ask you to confirm before applying it.",
-                    draft,
-                    "change_value_required",
-                )
-
-        if state == AWAITING_COURSE_CHANGE_SELECTION:
-            if _keeps_enrollment(text):
-                draft = self._pending_owned_draft(conversation)
-                self._clear_pending(conversation)
-                db.session.commit()
-                return ManagementResult(
-                    "No problem — your enrollment remains unchanged.",
-                    draft,
-                    "change_kept",
-                )
-            return self._select_course_change(conversation, text)
-
-        if state == AWAITING_COURSE_CHANGE_INTAKE:
-            if _keeps_enrollment(text):
-                draft = self._pending_owned_draft(conversation)
-                self._clear_pending(conversation)
-                db.session.commit()
-                return ManagementResult(
-                    "No problem — your enrollment remains unchanged.",
-                    draft,
-                    "change_kept",
-                )
-            return self._select_course_change_intake(conversation, text)
-
+        # A persisted change state owns replies before any general enrollment,
+        # intake, course, or FAQ interpretation. This ordering is especially
+        # important for numeric menu choices.
         if state == AWAITING_CHANGE_CONFIRMATION:
             if _keeps_enrollment(text):
                 draft = self._pending_owned_draft(conversation)
@@ -304,6 +255,100 @@ class EnrollmentManagementService:
                 )
             if _confirms_change(text):
                 return self._confirm_change(conversation)
+
+        if state == AWAITING_RESCHEDULE_CONFIRMATION:
+            if _keeps_current_intake(text) or _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your current intake has been kept unchanged.",
+                    draft,
+                    "reschedule_kept",
+                )
+            if _confirms_reschedule(text) or _confirms_change(text):
+                return self._confirm_reschedule(conversation)
+            if is_reschedule_request(text) or _looks_like_intake_selection(text):
+                return self._select_reschedule_target(conversation, text)
+
+        if state in {AWAITING_CHANGE_SELECTION, LEGACY_AWAITING_CHANGE_SELECTION}:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your enrollment remains unchanged.",
+                    draft,
+                    "change_kept",
+                )
+            option = _change_option(text)
+            if option == "intake":
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                return self._request_reschedule(conversation, "", draft=draft)
+            if option == "course":
+                self._clear_pending(conversation)
+                return self._request_course_change(conversation, "")
+            if option == "cancel":
+                self._clear_pending(conversation)
+                return self._request_cancellation(conversation, text)
+            if option == "participant":
+                draft = self._pending_owned_draft(conversation)
+                return ManagementResult(
+                    "Please provide the participant detail you want to update, for "
+                    "example “Change my email to name@example.com”. I’ll validate it "
+                    "and ask you to confirm before applying it.",
+                    draft,
+                    "change_value_required",
+                )
+            if _is_numeric_menu_attempt(text):
+                return ManagementResult(
+                    self._change_menu_reply(),
+                    self._pending_owned_draft(conversation),
+                    "change_selection_required",
+                )
+            direct = self._prepare_confirmed_change(conversation, text)
+            if direct is not None:
+                return direct
+
+        if state == AWAITING_COURSE_CHANGE_SELECTION:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your enrollment remains unchanged.",
+                    draft,
+                    "change_kept",
+                )
+            if _looks_like_course_selection(self.catalogue, text):
+                return self._select_course_change(conversation, text)
+
+        if state == AWAITING_COURSE_CHANGE_INTAKE:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your enrollment remains unchanged.",
+                    draft,
+                    "change_kept",
+                )
+            if _looks_like_intake_selection(text):
+                return self._select_course_change_intake(conversation, text)
+
+        if state == AWAITING_RESCHEDULE_COURSE_SELECTION:
+            if _keeps_enrollment(text):
+                draft = self._pending_owned_draft(conversation)
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "No problem — your enrollment remains unchanged.",
+                    draft,
+                    "change_kept",
+                )
+            if _looks_like_course_selection(self.catalogue, text):
+                return self._select_reschedule_course(conversation, text)
         if state == AWAITING_CANCELLATION:
             if _keeps_enrollment(text):
                 draft = self._pending_owned_draft(conversation)
@@ -353,7 +398,7 @@ class EnrollmentManagementService:
             return self._request_cancellation(conversation, text)
 
         if state == AWAITING_RESCHEDULE_SELECTION:
-            if _keeps_current_intake(text):
+            if _keeps_current_intake(text) or _keeps_enrollment(text):
                 draft = self._pending_owned_draft(conversation)
                 self._clear_pending(conversation)
                 db.session.commit()
@@ -366,21 +411,6 @@ class EnrollmentManagementService:
                 self._clear_pending(conversation)
                 return self._request_cancellation(conversation, text)
             if _looks_like_intake_selection(text):
-                return self._select_reschedule_target(conversation, text)
-
-        if state == AWAITING_RESCHEDULE_CONFIRMATION:
-            if _keeps_current_intake(text):
-                draft = self._pending_owned_draft(conversation)
-                self._clear_pending(conversation)
-                db.session.commit()
-                return ManagementResult(
-                    "No problem — your current intake has been kept unchanged.",
-                    draft,
-                    "reschedule_kept",
-                )
-            if _confirms_reschedule(text):
-                return self._confirm_reschedule(conversation)
-            if is_reschedule_request(text) or _looks_like_intake_selection(text):
                 return self._select_reschedule_target(conversation, text)
 
         # Explicit participant-managed changes take priority over status, active
@@ -399,15 +429,15 @@ class EnrollmentManagementService:
             return self._request_change(conversation, text)
 
         if is_status_query(text):
-            context = self.resolver.resolve(conversation, text)
-            if context.enrollment is not None:
+            status_draft = self._status_response_draft(conversation)
+            if status_draft is not None:
                 self._audit(
-                    context.enrollment,
+                    status_draft,
                     "enrollment_status_viewed",
-                    "Participant requested deterministic grouped enrollment status",
+                    "Participant requested filtered current-catalogue enrollment status",
                 )
                 db.session.commit()
-            reply = self.status_context_reply(context)
+            reply = self.status_reply(conversation)
             if conversation.pending_action in {
                 AWAITING_COURSE_ADDITION_INTAKE,
                 AWAITING_COURSE_ADDITION_CONFIRMATION,
@@ -433,7 +463,7 @@ class EnrollmentManagementService:
                 )
             return ManagementResult(
                 reply,
-                context.enrollment,
+                status_draft,
                 "status_lookup",
             )
         if is_participant_training_query(text):
@@ -477,13 +507,19 @@ class EnrollmentManagementService:
         self._set_pending(conversation, AWAITING_CHANGE_SELECTION, draft)
         db.session.commit()
         return ManagementResult(
+            self._change_menu_reply(),
+            draft,
+            "change_selection_required",
+        )
+
+    @staticmethod
+    def _change_menu_reply():
+        return (
             "I can help you update your enrollment.\n\n"
             "What would you like to change?\n\n"
             "1. Participant details\n2. Course\n3. Intake date\n"
             "4. Cancel enrollment\n\n"
-            "Please reply with the option number or describe the change.",
-            draft,
-            "change_selection_required",
+            "Please reply with the option number or describe the change."
         )
 
     def _request_invoice_resend(self, conversation, message=""):
@@ -836,6 +872,20 @@ class EnrollmentManagementService:
             )
         draft.previous_intake_id = previous["intake_id"]
         draft.rescheduled_at = utc_now()
+        active_courses = ordered_courses(draft)
+        if len(active_courses) == 1:
+            course_row = active_courses[0]
+            course_row.course_id = course["id"]
+            course_row.course_name = course["name"]
+            course_row.course_fee = Decimal(candidate["course_fee"])
+            course_row.previous_intake_id = previous["intake_id"]
+            course_row.intake_id = target.id
+            course_row.intake_start_date = target.date
+            course_row.intake_end_date = target.end_date
+            course_row.intake_is_demo = bool(target.is_demo)
+            course_row.allocated_intake_id = draft.allocated_intake_id
+            course_row.intake_allocated_at = draft.intake_allocated_at
+            course_row.rescheduled_at = draft.rescheduled_at
         self._clear_pending(conversation)
         self._audit(
             draft,
@@ -1227,28 +1277,160 @@ class EnrollmentManagementService:
         )
 
     def status_reply(self, conversation):
-        drafts = self._owned_drafts(conversation)
-        current = conversation.enrollment_draft
-        if current is not None:
-            return self._single_status(current)
-        if not drafts:
+        """Show confirmed current courses and at most this chat's incomplete draft."""
+
+        confirmed = []
+        seen = set()
+        for draft in self._owned_drafts(conversation):
+            entries = self._confirmed_current_course_entries(draft)
+            if not entries:
+                continue
+            signature = tuple(
+                sorted((course["id"], intake_key) for course, _, intake_key in entries)
+            )
+            if signature in seen:
+                continue
+            seen.add(signature)
+            confirmed.append((draft, entries))
+
+        current_draft = self._current_incomplete_draft(conversation)
+        if not confirmed and current_draft is None:
             return (
                 "📋 Enrollment Status\n\n"
                 "No saved enrollment was found for your account. You can start an "
                 "enrollment whenever you’re ready."
             )
-        if len(drafts) > 1:
-            lines = ["📋 Your Enrollments", ""]
-            for number, draft in enumerate(drafts, start=1):
-                lines.append(
-                    f"{number}. {draft.course or 'Course not selected'} — "
-                    f"{self._intake_display(draft)} — {self._status_label(draft)}"
+
+        lines = [
+            "✅ Enrollment Status: Confirmed"
+            if len(confirmed) == 1 and current_draft is None
+            else "📋 Enrollment Status"
+        ]
+        if confirmed:
+            lines.extend(["", "Confirmed enrollments"])
+            number = 1
+            for draft, entries in confirmed:
+                for course, intake_display, _ in entries:
+                    lines.append(
+                        f"{number}. {course['name']} — {intake_display} — Confirmed"
+                    )
+                    number += 1
+                if draft.friendly_reference:
+                    lines.append(f"   Reference: {draft.friendly_reference}")
+                export = MasterInvoiceExport.query.filter_by(
+                    enrollment_id=draft.id
+                ).one_or_none()
+                if export is not None and export.invoice_number:
+                    lines.append(f"   Invoice number: {export.invoice_number}")
+                amount = (
+                    total_fee(draft)
+                    if draft.course_enrollments
+                    else draft.course_fee
                 )
-            lines.extend(
-                ["", "Please open the relevant previous chat so I can show that enrollment safely."]
+                if amount is not None:
+                    lines.append(f"   Current invoice total: S${amount:.2f}")
+
+        if current_draft is not None:
+            lines.extend(["", "Current draft"])
+            lines.append("- Status: Draft — more information is required")
+            course = self.catalogue.course_for(
+                current_draft.course_id or current_draft.course
             )
-            return "\n".join(lines)
-        return self._single_status(drafts[0])
+            lines.append(
+                f"- Course: {course['name'] if course else 'Not selected yet'}"
+            )
+            if current_draft.preferred_intake_date:
+                lines.append(f"- Selected intake: {self._intake_display(current_draft)}")
+            saved = [
+                self.catalogue.enrollment_field_label(field)
+                for field in (
+                    "full_name", "nric", "date_of_birth", "email", "mobile_number"
+                )
+                if getattr(current_draft, field, None) is not None
+            ]
+            lines.append(f"- Saved details: {', '.join(saved) if saved else 'None yet'}")
+            from backend.services.enrollment.enrollment_service import EnrollmentService
+
+            missing = EnrollmentService.missing_fields(current_draft, self.catalogue)
+            if missing:
+                lines.append(
+                    "- Still needed: "
+                    + ", ".join(
+                        self.catalogue.enrollment_field_label(field)
+                        for field in missing
+                    )
+                )
+            corrections = list((current_draft.validation_errors or {}).keys())
+            if corrections:
+                lines.append(
+                    "- Needs correction: "
+                    + ", ".join(
+                        self.catalogue.enrollment_field_label(field)
+                        for field in corrections
+                    )
+                )
+        return "\n".join(lines)
+
+    def _status_response_draft(self, conversation):
+        current = conversation.enrollment_draft
+        if self._is_current_incomplete_draft(current):
+            return current
+        if current is not None and self._confirmed_current_course_entries(current):
+            return current
+        return None
+
+    def _current_incomplete_draft(self, conversation):
+        draft = conversation.enrollment_draft
+        return draft if self._is_current_incomplete_draft(draft) else None
+
+    def _is_current_incomplete_draft(self, draft):
+        if draft is None or draft.status not in {"collecting", "awaiting_confirmation"}:
+            return False
+        current_ids = {course["id"] for course in self.catalogue.courses}
+        active_rows = [
+            row
+            for row in draft.course_enrollments
+            if row.status not in {"cancelled", "discarded", "retired_unavailable"}
+        ]
+        if active_rows:
+            return all(row.course_id in current_ids for row in active_rows)
+        return draft.course_id is None or draft.course_id in current_ids
+
+    def _confirmed_current_course_entries(self, draft):
+        if (
+            draft is None
+            or draft.confirmed_at is None
+            or draft.status not in ACTIVE_STATUSES
+        ):
+            return []
+        entries = []
+        for row in ordered_courses(draft, include_cancelled=True):
+            if row.status not in ACTIVE_STATUSES:
+                continue
+            course = self.catalogue.course_for(row.course_id)
+            if course is None:
+                continue
+            entries.append(
+                (
+                    course,
+                    display_course_range(row),
+                    row.intake_id
+                    or f"{row.intake_start_date or ''}:{row.intake_end_date or ''}",
+                )
+            )
+        if entries:
+            return entries
+        course = self.catalogue.course_for(draft.course_id or draft.course)
+        if course is None:
+            return []
+        return [
+            (
+                course,
+                self._intake_display(draft),
+                draft.intake_id
+                or f"{draft.intake_start_date or ''}:{draft.intake_end_date or ''}",
+            )
+        ]
 
     def _single_status(self, draft):
         name = _first_name(draft.full_name)
@@ -1405,7 +1587,7 @@ class EnrollmentManagementService:
                 [
                     "",
                     "Your enrollment is confirmed.",
-                    "You can ask to change details, reschedule, cancel, resend the invoice, or check status.",
+                    "You can ask to change enrollment details or the intake date, cancel, resend the invoice, or check status.",
                 ]
             )
             return "\n".join(lines)
@@ -1900,8 +2082,10 @@ class EnrollmentManagementService:
             "draft_discarded",
         )
 
-    def _request_reschedule(self, conversation, message):
-        draft, multiple_reply = self._action_target(conversation, message)
+    def _request_reschedule(self, conversation, message, draft=None):
+        multiple_reply = None
+        if draft is None:
+            draft, multiple_reply = self._action_target(conversation, message)
         if multiple_reply:
             return ManagementResult(multiple_reply, None, "selection_required")
         if draft is None:
@@ -1910,20 +2094,98 @@ class EnrollmentManagementService:
             return ManagementResult("A cancelled enrollment cannot be rescheduled. Staff assistance is required.", draft, "not_reschedulable")
         if not draft.confirmed_at or draft.status not in ACTIVE_STATUSES:
             return ManagementResult("Please complete and confirm this enrollment before requesting an intake change.", draft, "not_reschedulable")
-        if self._course_started(draft) or draft.status in FINISHED_STATUSES:
+
+        courses = self._reschedulable_courses(draft)
+        if len(courses) > 1:
+            selected_course = self._match_reschedule_course(
+                draft, message, [row.id for row in courses], allow_number=False
+            )
+            if selected_course is None:
+                self._set_pending(
+                    conversation, AWAITING_RESCHEDULE_COURSE_SELECTION, draft
+                )
+                conversation.pending_change_data = {
+                    "course_enrollment_ids": [row.id for row in courses]
+                }
+                self._audit(
+                    draft,
+                    "intake_change_course_required",
+                    "Participant must choose the course whose intake should change",
+                )
+                db.session.commit()
+                return ManagementResult(
+                    self._reschedule_course_choices(courses),
+                    draft,
+                    "reschedule_course_selection_required",
+                )
+            return self._begin_reschedule_selection(
+                conversation, draft, selected_course, message
+            )
+
+        course = courses[0] if courses else None
+        return self._begin_reschedule_selection(conversation, draft, course, message)
+
+    def _select_reschedule_course(self, conversation, message):
+        draft = self._pending_owned_draft(conversation)
+        pending = dict(conversation.pending_change_data or {})
+        allowed_ids = pending.get("course_enrollment_ids") or []
+        course = (
+            self._match_reschedule_course(
+                draft, message, allowed_ids, allow_number=True
+            )
+            if draft is not None
+            else None
+        )
+        if draft is None or course is None:
+            courses = self._reschedulable_courses(draft, allowed_ids)
+            if draft is None or not courses:
+                self._clear_pending(conversation)
+                db.session.commit()
+                return ManagementResult(
+                    "The pending intake change is no longer available. No change was made.",
+                    draft,
+                    "change_unavailable",
+                )
+            return ManagementResult(
+                self._reschedule_course_choices(courses),
+                draft,
+                "reschedule_course_selection_required",
+            )
+        return self._begin_reschedule_selection(conversation, draft, course, "")
+
+    def _begin_reschedule_selection(self, conversation, draft, course, message):
+        course_start = (
+            course.intake_start_date
+            if course is not None
+            else draft.intake_start_date or draft.preferred_intake_date
+        )
+        if (
+            (course_start and course_start <= self.intakes.today)
+            or draft.status in FINISHED_STATUSES
+        ):
             self._escalate_once(draft, "Rescheduling requested after the course start date.", "reschedule_review")
             self._audit(draft, "reschedule_escalated", "Course has started or finished")
             db.session.commit()
             return ManagementResult("This course has already started or finished, so staff must review any date change.", draft, "reschedule_escalated")
 
         self._set_pending(conversation, AWAITING_RESCHEDULE_SELECTION, draft)
+        conversation.pending_change_data = {
+            "course_enrollment_id": course.id if course is not None else None,
+            "course_id": (
+                course.course_id
+                if course is not None
+                else draft.course_id or self.catalogue.course_id_for(draft.course)
+            ),
+        }
         draft.reschedule_requested_at = utc_now()
-        selected, error = self.catalogue.match_intake_selection(message, draft.course)
-        if selected:
-            db.session.flush()
-            return self._set_reschedule_target(conversation, draft, selected)
+        reply = self._intake_choices(conversation, "")
+        if _looks_like_intake_selection(message):
+            selected, error = self._match_reschedule_selection(conversation, message)
+            if selected:
+                db.session.flush()
+                return self._set_reschedule_target(conversation, draft, selected)
+            reply = self._intake_choices(conversation, message, error)
         self._audit(draft, "reschedule_requested", "Participant must select an available intake")
-        reply = self._intake_choices(conversation, message, error)
         db.session.commit()
         return ManagementResult(
             reply,
@@ -1945,12 +2207,37 @@ class EnrollmentManagementService:
         return self._set_reschedule_target(conversation, draft, selected)
 
     def _set_reschedule_target(self, conversation, draft, selected):
-        if selected["id"] in {draft.intake_id, draft.allocated_intake_id}:
-            self._clear_pending(conversation)
+        course = self._pending_reschedule_course(conversation, draft)
+        current_intake_id = (
+            course.intake_id if course is not None else draft.intake_id
+        )
+        current_allocated_id = (
+            course.allocated_intake_id
+            if course is not None
+            else draft.allocated_intake_id
+        )
+        if selected["id"] in {current_intake_id, current_allocated_id}:
+            reply = self._intake_choices(
+                conversation, "", "You are already enrolled in this intake."
+            )
             db.session.commit()
-            return ManagementResult("You are already enrolled in this intake.", draft, "same_intake")
+            return ManagementResult(reply, draft, "same_intake")
+        allowed_ids = set(conversation.pending_intake_options or [])
+        course_id = (
+            course.course_id
+            if course is not None
+            else draft.course_id or self.catalogue.course_id_for(draft.course)
+        )
+        if selected["id"] not in allowed_ids or selected.get("course_id") != course_id:
+            reply = self._intake_choices(
+                conversation,
+                "",
+                "Please choose one of the displayed alternative intakes.",
+            )
+            db.session.commit()
+            return ManagementResult(reply, draft, "reschedule_selection_required")
         target = db.session.get(CourseDate, selected["id"])
-        error = self.intakes.allocation_error(selected["id"], draft)
+        error = self.intakes.allocation_error(selected["id"], course or draft)
         if target is None or error:
             conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
             conversation.pending_target_intake_id = None
@@ -1959,21 +2246,25 @@ class EnrollmentManagementService:
             return ManagementResult(reply, draft, "reschedule_selection_required")
         conversation.pending_action = AWAITING_RESCHEDULE_CONFIRMATION
         conversation.pending_target_intake_id = target.id
-        conversation.pending_source_intake_id = draft.allocated_intake_id or draft.intake_id
+        conversation.pending_source_intake_id = current_allocated_id or current_intake_id
         conversation.pending_intake_options = None
-        conversation.pending_change_data = None
         conversation.pending_action_requested_at = utc_now()
         self._audit(draft, "reschedule_target_selected", f"Target intake {target.date.isoformat()}")
         db.session.commit()
         name = _first_name(draft.full_name)
+        course_name = course.course_name if course is not None else draft.course
+        current_display = (
+            display_course_range(course)
+            if course is not None
+            else self._intake_display(draft)
+        )
         return ManagementResult(
             (f"Hi {name} 👋\n\n" if name else "Hi 👋\n\n")
             + "Please confirm this intake change:\n\n"
-            + f"- Current intake: {self._intake_display(draft)}\n"
+            + f"- Course: {course_name}\n"
+            + f"- Current intake: {current_display}\n"
             + f"- New intake: {self._row_display(target)}\n"
-            + f"- Time: {(self.catalogue.course_for(draft.course_id or draft.course) or {}).get('training_time') or 'Staff confirmation is required'}\n"
-            + "- Availability: Open\n\n"
-            + "Reply “Confirm reschedule” to continue, or “Keep current intake” to cancel this change.",
+            + "\nReply “Confirm change” to continue, or “Keep enrollment” to make no change.",
             draft,
             "reschedule_confirmation_required",
         )
@@ -1990,18 +2281,32 @@ class EnrollmentManagementService:
             db.session.commit()
             return ManagementResult("This enrollment can no longer be rescheduled. No change was made.", draft, "not_reschedulable")
         target = db.session.get(CourseDate, target_id, with_for_update=True)
+        course = self._pending_reschedule_course(conversation, draft)
+        course_id = (
+            course.course_id
+            if course is not None
+            else draft.course_id or self.catalogue.course_id_for(draft.course)
+        )
         if target is None:
             conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
             conversation.pending_target_intake_id = None
             reply = self._intake_choices(conversation, "", "That intake is no longer available.")
             db.session.commit()
             return ManagementResult(reply, draft, "reschedule_selection_required")
-        if draft.allocated_intake_id == target.id:
+        current_allocated_id = (
+            course.allocated_intake_id
+            if course is not None
+            else draft.allocated_intake_id
+        )
+        if current_allocated_id == target.id:
             self._clear_pending(conversation)
             db.session.commit()
             return ManagementResult("You are already enrolled in this intake.", draft, "same_intake")
 
-        error = self.intakes.allocation_error(target.id, draft)
+        if target.course_id != course_id:
+            error = "That intake does not belong to the selected course."
+        else:
+            error = self.intakes.allocation_error(target.id, course or draft)
         if error:
             conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
             conversation.pending_target_intake_id = None
@@ -2009,36 +2314,67 @@ class EnrollmentManagementService:
             db.session.commit()
             return ManagementResult(reply, draft, "reschedule_selection_required")
 
-        previous = (
-            draft.intake_id,
-            draft.preferred_intake_date,
-            draft.intake_start_date,
-            draft.intake_end_date,
-            draft.intake_is_demo,
-        )
-        draft.intake_id = target.id
-        draft.preferred_intake_date = target.date
-        draft.intake_start_date = target.date
-        draft.intake_end_date = target.end_date
-        draft.intake_is_demo = bool(target.is_demo)
-        try:
-            self.intakes.allocate(draft)
-        except ValueError as exc:
-            (
+        if course is not None:
+            previous = (
+                course.intake_id,
+                course.intake_start_date,
+                course.intake_end_date,
+                course.intake_is_demo,
+            )
+            course.intake_id = target.id
+            course.intake_start_date = target.date
+            course.intake_end_date = target.end_date
+            course.intake_is_demo = bool(target.is_demo)
+            try:
+                self.intakes.allocate_registration(draft, [course])
+            except ValueError as exc:
+                (
+                    course.intake_id,
+                    course.intake_start_date,
+                    course.intake_end_date,
+                    course.intake_is_demo,
+                ) = previous
+                sync_registration(draft)
+                conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
+                conversation.pending_target_intake_id = None
+                reply = self._intake_choices(conversation, "", str(exc))
+                db.session.commit()
+                return ManagementResult(reply, draft, "reschedule_selection_required")
+            course.previous_intake_id = previous[0]
+            course.rescheduled_at = utc_now()
+            sync_registration(draft)
+        else:
+            previous = (
                 draft.intake_id,
                 draft.preferred_intake_date,
                 draft.intake_start_date,
                 draft.intake_end_date,
                 draft.intake_is_demo,
-            ) = previous
-            conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
-            conversation.pending_target_intake_id = None
-            reply = self._intake_choices(conversation, "", str(exc))
-            db.session.commit()
-            return ManagementResult(reply, draft, "reschedule_selection_required")
+            )
+            draft.intake_id = target.id
+            draft.preferred_intake_date = target.date
+            draft.intake_start_date = target.date
+            draft.intake_end_date = target.end_date
+            draft.intake_is_demo = bool(target.is_demo)
+            try:
+                self.intakes.allocate(draft)
+            except ValueError as exc:
+                (
+                    draft.intake_id,
+                    draft.preferred_intake_date,
+                    draft.intake_start_date,
+                    draft.intake_end_date,
+                    draft.intake_is_demo,
+                ) = previous
+                conversation.pending_action = AWAITING_RESCHEDULE_SELECTION
+                conversation.pending_target_intake_id = None
+                reply = self._intake_choices(conversation, "", str(exc))
+                db.session.commit()
+                return ManagementResult(reply, draft, "reschedule_selection_required")
 
         draft.previous_intake_id = previous[0]
         draft.rescheduled_at = utc_now()
+        course_name = course.course_name if course is not None else draft.course
         self._clear_pending(conversation)
         self._audit(
             draft,
@@ -2046,13 +2382,75 @@ class EnrollmentManagementService:
             f"Previous intake {previous[0] or 'unscheduled'}; new intake {target.id}",
         )
         db.session.commit()
-        self._update_master_invoice(draft)
+        self._refresh_group_invoice(draft)
         return ManagementResult(
-            f"Your enrollment has been rescheduled to {self._row_display(target)}. "
+            f"Your {course_name} intake has been changed to {self._row_display(target)}. "
             "Your other enrollment details remain unchanged ✅",
             draft,
             "rescheduled",
         )
+
+    def _reschedulable_courses(self, draft, course_ids=None):
+        if draft is None:
+            return []
+        allowed = set(course_ids or [])
+        return [
+            row
+            for row in ordered_courses(draft)
+            if row.status in ACTIVE_STATUSES and (not allowed or row.id in allowed)
+        ]
+
+    def _match_reschedule_course(
+        self, draft, message, course_ids=None, *, allow_number
+    ):
+        rows = self._reschedulable_courses(draft, course_ids)
+        text = _normalise(message)
+        if allow_number:
+            number = re.fullmatch(r"(?:course\s*)?([1-9]\d*)", text)
+            if number:
+                position = int(number.group(1)) - 1
+                return rows[position] if 0 <= position < len(rows) else None
+            ordinal = re.fullmatch(r"(?:the )?(first|second|third)(?: course)?", text)
+            if ordinal:
+                position = {"first": 0, "second": 1, "third": 2}[ordinal.group(1)]
+                return rows[position] if position < len(rows) else None
+        recognised, _ = self.catalogue.match_course_selection(message)
+        recognised_ids = {item["id"] for item in recognised}
+        direct = self.catalogue.course_for(message)
+        if direct is not None:
+            recognised_ids.add(direct["id"])
+        matches = [row for row in rows if row.course_id in recognised_ids]
+        return matches[0] if len(matches) == 1 else None
+
+    @staticmethod
+    def _reschedule_course_choices(courses):
+        lines = ["Which course intake would you like to change?", ""]
+        lines.extend(
+            f"{number}. {row.course_name} — {display_course_range(row)}"
+            for number, row in enumerate(courses, start=1)
+        )
+        lines.extend(
+            [
+                "",
+                "Reply with the course number or name, or “Keep enrollment” to make no change.",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _pending_reschedule_course(self, conversation, draft):
+        pending = dict(conversation.pending_change_data or {})
+        course_enrollment_id = pending.get("course_enrollment_id")
+        if course_enrollment_id:
+            row = db.session.get(EnrollmentCourse, course_enrollment_id)
+            if (
+                row is not None
+                and row.enrollment_id == draft.id
+                and row.status in ACTIVE_STATUSES
+            ):
+                return row
+            return None
+        rows = self._reschedulable_courses(draft)
+        return rows[0] if len(rows) == 1 else None
 
     def _owned_drafts(self, conversation):
         if not conversation.user_id:
@@ -2127,11 +2525,29 @@ class EnrollmentManagementService:
         if reason:
             reason = reason.split("\n\nAvailable choices:", 1)[0]
         draft = self._pending_owned_draft(conversation) or self._current_or_single(conversation)
+        course = self._pending_reschedule_course(conversation, draft) if draft else None
+        pending = dict(conversation.pending_change_data or {})
+        course_value = (
+            course.course_id
+            if course is not None
+            else pending.get("course_id") or (draft.course_id or draft.course if draft else None)
+        )
+        current_ids = {
+            value
+            for value in (
+                course.intake_id if course is not None else (draft.intake_id if draft else None),
+                course.allocated_intake_id
+                if course is not None
+                else (draft.allocated_intake_id if draft else None),
+            )
+            if value
+        }
         available = list(
-            self.catalogue.selectable_intakes_for(draft.course)
-            if draft and draft.course
+            self.catalogue.selectable_intakes_for(course_value)
+            if course_value
             else self.catalogue.selectable_intakes
         )
+        available = [item for item in available if item["id"] not in current_ids]
         lowered = (message or "").casefold()
         months = [
             month for month in (
@@ -2147,7 +2563,7 @@ class EnrollmentManagementService:
         heading = f"📅 Available {months[0]} Intakes" if len(months) == 1 else "📅 Available Intakes"
         if not available:
             conversation.pending_intake_options = []
-            return (reason or "No matching future open intake is available.") + " Staff confirmation is required."
+            return (reason or "No alternative future open intake is available.") + " Staff confirmation is required."
         conversation.pending_intake_options = [item["id"] for item in available]
         choices = "\n".join(
             f"{number}. {item['display_date']} — {item['intake_type']}"
@@ -2158,19 +2574,47 @@ class EnrollmentManagementService:
 
     def _match_reschedule_selection(self, conversation, message):
         supplied = _normalise(message)
-        if re.fullmatch(r"\d+", supplied) and conversation.pending_intake_options:
-            position = int(supplied)
-            if 1 <= position <= len(conversation.pending_intake_options):
+        option_ids = list(conversation.pending_intake_options or [])
+        option = re.fullmatch(r"\d+", supplied)
+        if option:
+            position = int(option.group())
+            if 1 <= position <= len(option_ids):
+                selected = self.catalogue.intake_for_id(option_ids[position - 1])
+                if selected and selected.get("status") == "open":
+                    return selected, None
+            return None, "Please choose one of the displayed intake numbers."
+        ordinal = re.search(
+            r"\b(first|second|third)(?: (?:available )?(?:intake|option|choice))\b",
+            supplied,
+        )
+        if ordinal:
+            position = {"first": 1, "second": 2, "third": 3}[ordinal.group(1)]
+            if 1 <= position <= len(option_ids):
                 selected = self.catalogue.intake_for_id(
-                    conversation.pending_intake_options[position - 1]
+                    option_ids[position - 1]
                 )
                 if selected and selected.get("status") == "open":
                     return selected, None
             return None, "Please choose one of the displayed intake numbers."
         draft = self._pending_owned_draft(conversation) or self._current_or_single(conversation)
-        return self.catalogue.match_intake_selection(
-            message, draft.course if draft else None
-        )
+        course = self._pending_reschedule_course(conversation, draft) if draft else None
+        course_value = course.course_id if course is not None else (draft.course if draft else None)
+        selected, error = self.catalogue.match_intake_selection(message, course_value)
+        if selected is not None and selected["id"] not in set(option_ids):
+            current_ids = {
+                value
+                for value in (
+                    course.intake_id if course is not None else (draft.intake_id if draft else None),
+                    course.allocated_intake_id
+                    if course is not None
+                    else (draft.allocated_intake_id if draft else None),
+                )
+                if value
+            }
+            if selected["id"] in current_ids:
+                return selected, None
+            return None, "Please choose one of the displayed alternative intakes."
+        return selected, error
 
     def _course_started(self, draft):
         start = draft.intake_start_date or draft.preferred_intake_date
@@ -2280,6 +2724,10 @@ class EnrollmentManagementService:
             return "failed"
 
     def _intake_display(self, draft):
+        if draft.intake_id:
+            intake = db.session.get(CourseDate, draft.intake_id)
+            if intake is not None:
+                return _date_range(intake.date, intake.end_date)
         start = draft.intake_start_date or draft.preferred_intake_date
         end = draft.intake_end_date or start
         if not start:
@@ -2356,11 +2804,14 @@ def _whole_registration_cancellation(message):
 
 def is_reschedule_request(message):
     text = _normalise(message)
+    if re.search(r"\bdid my reschedul.*work\b", text):
+        return False
     return any(
         re.search(pattern, text)
         for pattern in (
             r"\breschedul",
             r"\bchange (?:me |my )?.*\b(?:intake|course date|date)\b",
+            r"\bchoose (?:me |my )?(?:an? |the )?(?:other|another|new) (?:intake|date)\b",
             r"\bselected the wrong (?:course )?date\b",
             r"\bmove me to\b",
             r"\bput me in (?:the )?(?:weekend|weekday|next|other)",
@@ -2372,6 +2823,8 @@ def is_reschedule_request(message):
 
 def is_status_query(message):
     text = _normalise(message)
+    if is_career_question(text):
+        return False
     return any(
         re.search(pattern, text)
         for pattern in (
@@ -2388,6 +2841,7 @@ def is_status_query(message):
             r"\bdid (?:my )?(?:enrolment|enrollment|registration) go through\b",
             r"\bshow (?:me )?my registration details\b",
             r"\bshow (?:me )?my registration\b",
+            r"\bshow (?:me )?my registrations\b",
             r"\bshow (?:me )?all my (?:enrolments|enrollments|courses)\b",
             r"\bwhich courses am i registered for\b",
             r"\bwhich intakes did i (?:select|choose)\b",
@@ -2503,7 +2957,9 @@ def _confirms_cancellation(message):
 
 
 def _confirms_reschedule(message):
-    return _normalise(message) in {"confirm reschedule", "confirm intake change", "yes", "yes please"}
+    return _normalise(message) in {
+        "confirm reschedule", "confirm intake change", "confirm change", "yes", "yes please"
+    }
 
 
 def _confirms_resend(message):
@@ -2587,7 +3043,10 @@ def _keeps_draft(message):
 
 
 def _keeps_current_intake(message):
-    return _normalise(message) in {"keep current intake", "keep my intake", "do not reschedule", "don t reschedule"}
+    return _normalise(message) in {
+        "keep current intake", "keep my intake", "keep enrollment", "keep enrolment",
+        "do not reschedule", "don t reschedule",
+    }
 
 
 def _confirmation_without_pending(message):
@@ -2602,10 +3061,24 @@ def _looks_like_intake_selection(message):
     text = _normalise(message)
     return bool(
         re.fullmatch(r"\d+", text)
-        or re.search(r"\b(?:first|second|third) (?:intake|option)\b", text)
+        or re.search(
+            r"\b(?:first|second|third)(?: (?:available )?(?:intake|option|choice))\b",
+            text,
+        )
         or re.search(r"\b\d{1,2}(?:st|nd|rd|th)? (?:january|february|march|april|may|june|july|august|september|october|november|december)\b", text)
+        or re.search(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+20\d{2})?\b", text)
         or re.search(r"\b(?:weekend|weekday) intake\b", text)
     )
+
+
+def _looks_like_course_selection(catalogue, message):
+    text = _normalise(message)
+    if re.fullmatch(r"(?:course\s*)?\d+", text):
+        return True
+    if re.match(r"^(?:what|when|where|why|how|can|could|is|are|do|does)\b", text):
+        return False
+    selected, _ = catalogue.match_course_selection(message)
+    return bool(selected or catalogue.course_for(message))
 
 
 def _safe_reason(message):
@@ -2665,6 +3138,7 @@ def _safe_change_display(field, value):
 __all__ = [
     "AWAITING_CANCELLATION",
     "AWAITING_RESCHEDULE_CONFIRMATION",
+    "AWAITING_RESCHEDULE_COURSE_SELECTION",
     "AWAITING_RESCHEDULE_SELECTION",
     "EnrollmentManagementService",
     "ManagementResult",
