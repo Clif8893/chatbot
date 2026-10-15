@@ -18,6 +18,12 @@ Automated tests use only synthetic identities.
 The current implementation includes:
 
 - Intent classification into `faq`, `enrollment`, or `unclear`
+- Module A lead nurturing in natural language (no slash commands): a numbered
+  quick-reply menu on first contact or when the participant asks for "help" or
+  the "menu", opt-out by STOP or phrases such as "please stop sending me
+  reminders", staff escalation for requests to talk to someone, sensitive
+  messages and questions approved content cannot answer, and staff-editable
+  3-step lead follow-up templates
 - A grounded FAQ/Enquiry Agent using editable company course information
 - An Enrollment Agent that collects selected course(s), one intake per course,
   name, NRIC/FIN, date of birth, email, and mobile number
@@ -29,6 +35,34 @@ The current implementation includes:
 - SQLite locally, with PostgreSQL support through `DATABASE_URL`
 - Database-backed history, browser conversation resumption, and a new-conversation action
 
+FAQ replies follow the course the participant means. A question naming one
+course by name, short name, list position ("the 2nd course"), duration ("the
+1-day course") or fee is answered for that course only. Follow-up questions,
+quick-action buttons, the numbered menu and "I'd like to enrol" stay on the
+course the conversation is about. "Your course", "courses", "both" or "all", or
+a fresh conversation with no course discussed, is answered for both courses. Each FAQ
+in `course_information.json` has a general `answer` plus optional per-course
+`course_answers`, which staff can edit in the portal.
+
+FAQ answers for the Basic Certificate in Dental Assisting use the wording of
+`2 days DA course Reply Template.docx` verbatim (job opportunities, minimum
+qualification, Mid-Career SkillsFuture, "why is your course so expensive",
+modes of payment, UTAP and the introduction). Replies are tailored only where
+the question needs it: a fee or timing question gets the matching template
+sentence, the introduction lists current intakes instead of the template's
+historical dates and omits the unconfirmed venue, and generic funding or payment
+answers add one line noting that Front Desk funding is not yet confirmed. The Front Desk Operations
+course has no supplied funding or payment source, so those answers still defer
+to staff. Its course description (`overview`) was drafted for the prototype and
+must be approved by Q&M before production use. Lead-nurturing wording lives in the `lead_nurturing` block of
+`backend/data/course_information.json`.
+
+Leads who message Q&M first by WhatsApp or email are told in the first reply
+that up to three reminders may follow and that STOP opts out. Set
+`FOLLOWUP_REQUIRE_EXPLICIT_CONSENT=true` to send reminders only to leads with a
+recorded opt-in; a recorded withdrawal always blocks them. `FOLLOWUP_HOURS`
+defaults to `48,96,144` (REQ-03); the proposal's sequence is `24,72,168`.
+
 External email, WhatsApp and payment-vision actions remain disabled until their
 server-side credentials are configured. Payment evidence always requires staff
 review unless an approved verification policy is explicitly enabled.
@@ -38,9 +72,9 @@ review unless an approved verification policy is explicitly enabled.
 - [Active Clifton's requirements](docs/requirements/Cliftons-Requirements.md)
 - [Original project proposal](docs/source-materials/proposal/QM_AI_Powered_Enquiry_and_Enrollment_System_V2_4.pdf)
 - [Spec-Driven Development PDF](docs/source-materials/proposal/SpecDrivenDevelopment.pdf)
-- [Company workflow presentation](docs/source-materials/company-workflow/Agentive%20Workflow%20for%20Dental%20Assisting%20Course%20Administration.pptx)
-- [Company workflow email](docs/source-materials/company-workflow/FW_%20Agentive%20Workflow%20for%20Dental%20Assisting%20Course%20Administration.eml)
-- [Company reply information](docs/source-materials/company-reply-information/2%20days%20DA%20course%20Reply%20Template.docx)
+- [Company workflow presentation](docs/source-materials/proposal/Agentive%20Workflow%20for%20Dental%20Assisting%20Course%20Administration.pptx)
+- [Company reply information](docs/source-materials/proposal/2%20days%20DA%20course%20Reply%20Template.docx)
+- Company workflow email dated 5 August 2026 (referenced by the requirements; not stored in this repository)
 - [Requirements template](docs/templates/requirements-template.md)
 - [Design template](docs/templates/design-template.md)
 - [Tasks template](docs/templates/tasks-template.md)

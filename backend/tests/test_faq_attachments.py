@@ -23,7 +23,7 @@ def test_skillsfuture_questions_use_written_answer_without_unapproved_attachment
     assert response.status_code == 200
     message = response.get_json()["message"]
 
-    assert "SkillsFuture eligibility has not been confirmed" in message["content"]
+    assert "The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\"" in message["content"]
     assert "image_url" not in message
     assert "image_alt" not in message
     assert "image_status" not in message

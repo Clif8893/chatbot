@@ -26,6 +26,7 @@ from backend.integrations_api import register_integrations
 from backend.operations_api import create_operations_blueprint
 from backend.quality_api import register_quality
 from backend.services.chat_service import (
+    QUICK_ACTIONS,
     ChatService,
     clean_customer_copy,
     serialize_enrollment,
@@ -320,8 +321,15 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
                 enrollment_management_service=enrollment_management_service,
                 enrollment_resolver=enrollment_resolver,
                 validation_options=enrollment_validation_options,
+                operations_service=operations_service,
             )
-            return jsonify(service.respond(conversation, payload["message"].strip()))
+            return jsonify(
+                service.respond(
+                    conversation,
+                    payload["message"].strip(),
+                    quick_action=payload.get("quick_action"),
+                )
+            )
         except AIConfigurationError:
             db.session.rollback()
             _record_chat_failure(repository, conversation, "ai_configuration")
@@ -730,6 +738,11 @@ def _validate_chat_request(incoming_request):
             "INVALID_CONVERSATION_ID",
             "A conversation_id text value is required.",
             400,
+        )
+    quick_action = payload.get("quick_action")
+    if quick_action is not None and quick_action not in QUICK_ACTIONS:
+        return _error_response(
+            "INVALID_QUICK_ACTION", "quick_action is not a recognised button.", 400
         )
     return None
 

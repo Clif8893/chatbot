@@ -241,7 +241,9 @@ def test_fee_interruption_preserves_draft_and_continue_resumes_without_ai(
     draft_id = add_active_draft(app, conversation_id, full_name="Test Student")
 
     faq = send(client, conversation_id, "Wait, how much is the course?").get_json()
-    assert "S$600 nett" in faq["message"]["content"]
+    # The participant is enrolling in Dental Assisting, so only that fee is given.
+    assert "$600 nett" in faq["message"]["content"]
+    assert "$450" not in faq["message"]["content"]
     assert "continue with your remaining enrollment details" in faq["message"]["content"]
     classify_after_faq = len(fake_ai.classify_calls)
 

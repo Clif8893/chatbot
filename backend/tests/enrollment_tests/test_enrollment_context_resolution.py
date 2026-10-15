@@ -123,17 +123,18 @@ def test_explicit_reference_is_owner_scoped_and_resolves_multiple(tmp_path, fake
     assert "ENR-2026-000099" not in rejected
 
 
-def test_generic_course_questions_are_focused_and_ambiguous_questions_clarify(tmp_path, fake_ai):
+def test_named_course_questions_are_focused_and_generic_questions_cover_both(tmp_path, fake_ai):
     app = management_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = client.post("/api/conversations").get_json()["conversation_id"]
     fee = send(client, conversation_id, "How much is Front Desk Operations?").get_json()["message"]["content"]
     timing = send(client, conversation_id, "What time is the Front Desk Operations workshop?").get_json()["message"]["content"]
-    ambiguous = send(client, conversation_id, "How much is the course?").get_json()["message"]["content"]
-    assert "S$450 nett" in fee and "S$600" not in fee
+    fresh_conversation = client.post("/api/conversations").get_json()["conversation_id"]
+    generic = send(client, fresh_conversation, "How much is the course?").get_json()["message"]["content"]
+    assert "$450 nett" in fee and "$600" not in fee
     assert "training hours have not been confirmed" in timing and "9:30am" not in timing
-    assert "Which course would you like to check?" in ambiguous
-    assert "Basic Certificate" in ambiguous and "Certificate in Dental Clinic Front Desk Operations" in ambiguous
+    assert "Which course would you like to check?" not in generic
+    assert "$600" in generic and "$450" in generic
 
 
 def test_confirmation_invoice_preparation_text_occurs_once(tmp_path, fake_ai):

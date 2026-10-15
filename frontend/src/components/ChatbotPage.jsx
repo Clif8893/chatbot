@@ -12,11 +12,13 @@ const welcomeMessage = {
   timestamp: new Date().toISOString(),
 };
 
+// The id tells the assistant a button was pressed, so it can ask which course
+// is meant when the conversation has not settled on one yet.
 const quickActions = [
-  { label: "About the course", message: "Tell me about the course" },
-  { label: "Course fee", message: "How much is the course fee?" },
-  { label: "Available dates", message: "What course dates are available?" },
-  { label: "Enroll now", message: "I’d like to enroll" },
+  { id: "about", label: "About the course", message: "Tell me about the course" },
+  { id: "fee", label: "Course fee", message: "How much is the course fee?" },
+  { id: "dates", label: "Available dates", message: "What course dates are available?" },
+  { id: "enrol", label: "Enroll now", message: "I’d like to enroll" },
 ];
 
 export function makeMessage(sender, text, timestamp = new Date().toISOString(), id, imageUrl, imageAlt, imageStatus) {
@@ -135,7 +137,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
     }
   }
 
-  async function handleSend(message) {
+  async function handleSend(message, quickAction) {
     if (!conversationId) {
       setError("A chat could not be started. Please select New Chat and try again.");
       return;
@@ -144,7 +146,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
     setMessages((current) => [...current, makeMessage("user", maskNricForDisplay(message))]);
     setIsLoading(true);
     try {
-      const response = await sendChatMessage(message, conversationId);
+      const response = await sendChatMessage(message, conversationId, quickAction);
       const reply = response.message;
       setMessages((current) => [...current, makeMessage(
         "bot",

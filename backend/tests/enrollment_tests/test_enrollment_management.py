@@ -508,7 +508,7 @@ def test_faq_interruption_preserves_pending_action_and_new_chat_does_not_inherit
         conversation_id,
         "Can I use Mid-Career SkillsFuture Credits?",
     ).get_json()
-    assert "SkillsFuture eligibility has not been confirmed" in faq["message"]["content"]
+    assert "You cannot use Midcareer Skillsfuture Credit" in faq["message"]["content"]
     with app.app_context():
         assert db.session.get(Conversation, conversation_id).pending_action == AWAITING_CANCELLATION
 

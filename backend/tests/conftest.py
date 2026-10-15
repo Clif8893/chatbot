@@ -215,6 +215,7 @@ class FakeAIService:
             answer = faq_answers["enrolment process"]
         elif "parking" in lowered:
             answer = catalogue["reply_style"]["staff_confirmation_message"]
+            return FAQAnswer(answer=answer, matched_topics=[], unanswered_subject="parking at the training venue")
         else:
             topics = ["course description"]
             answer = faq_answers["course description"]

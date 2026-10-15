@@ -1,3 +1,5 @@
+import React from "react";
+
 export default function QuickActions({ actions, onSelect }) {
   return (
     <nav className="quick-actions" aria-label="Suggested questions">
@@ -5,7 +7,7 @@ export default function QuickActions({ actions, onSelect }) {
         <button
           key={action.label}
           type="button"
-          onClick={() => onSelect(action.message)}
+          onClick={() => onSelect(action.message, action.id)}
         >
           {action.label}
         </button>

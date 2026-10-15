@@ -32,20 +32,22 @@ def test_faq_routes_to_faq_agent_and_lists_exact_courses(client, conversation_id
     assert payload["routing"]["agent"] == "faq_agent"
     assert "Basic Certificate in Dental Assisting" in content
     assert "Certificate in Dental Clinic Front Desk Operations" in content
-    assert "S$600 nett" in content and "S$450 nett" in content
+    assert "$600 nett" in content and "$450 nett" in content
     assert "Infection Control" not in content
 
 
 def test_selected_course_fees_use_current_contract(client, conversation_id):
     dental = send(client, conversation_id, "How much is the Basic Certificate in Dental Assisting?").get_json()["message"]["content"]
     front_desk = send(client, conversation_id, "How much is the Front Desk Operations course?").get_json()["message"]["content"]
-    assert dental == "The Basic Certificate in Dental Assisting is S$600 nett."
-    assert front_desk == "The Certificate in Dental Clinic Front Desk Operations is S$450 nett."
+    # Reply Template wording: "The course fee is $600 nett for a duration of ...".
+    assert dental.startswith("The course fee is $600 nett for a duration of 2 consecutive days")
+    assert front_desk == "The course fee for the Certificate in Dental Clinic Front Desk Operations is $450 nett for one training day."
 
 
-def test_ambiguous_fee_question_lists_both_approved_fees(client, conversation_id):
+def test_generic_fee_question_lists_both_approved_fees(client, conversation_id):
     reply = send(client, conversation_id, "How much is the course?").get_json()["message"]["content"]
-    assert "which course" in reply.casefold()
+    assert "which course" not in reply.casefold()
+    assert "$600" in reply and "$450" in reply
     assert "Basic Certificate in Dental Assisting" in reply
     assert "Certificate in Dental Clinic Front Desk Operations" in reply
 
@@ -53,11 +55,11 @@ def test_ambiguous_fee_question_lists_both_approved_fees(client, conversation_id
 def test_duration_and_training_time_are_course_scoped(client, conversation_id):
     dental = send(client, conversation_id, "How long is Dental Assisting and what time is it?").get_json()["message"]["content"]
     front_desk = send(client, conversation_id, "What time is the Front Desk Operations course?").get_json()["message"]["content"]
-    assert "Two consecutive training days" in dental
-    assert "9:30am to 5:30pm" in dental
+    assert "2 consective days" in dental
+    assert "930am to 530pm" in dental
     assert "one training day" in front_desk.casefold()
     assert "training hours have not been confirmed" in front_desk
-    assert "9:30am" not in front_desk
+    assert "930am" not in front_desk
 
 
 def test_current_dates_come_from_the_catalogue(client, conversation_id, fake_ai):
@@ -73,23 +75,29 @@ def test_current_dates_come_from_the_catalogue(client, conversation_id, fake_ai)
     assert fake_ai.enrollment_calls == []
 
 
-def test_unknown_policy_facts_use_safe_staff_confirmation(client, conversation_id):
-    prompts = (
-        "Can I use SkillsFuture for Dental Assisting?",
-        "Can I use Mid-Career SkillsFuture Credits for Dental Assisting?",
-        "How does UTAP work for Dental Assisting?",
-        "Can I pay by PayNow for Dental Assisting?",
-        "What is the minimum qualification for Dental Assisting?",
-        "Will I get a job after the Dental Assisting course?",
-        "What is the Dental Assisting course website?",
-        "Where is the Dental Assisting course venue?",
+def test_dental_assisting_policy_facts_use_approved_reply_template(client, conversation_id):
+    expectations = (
+        ("Can I use SkillsFuture for Dental Assisting?", "The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\""),
+        ("Can I use Mid-Career SkillsFuture Credits for Dental Assisting?", "You cannot use Midcareer Skillsfuture Credit"),
+        ("How does UTAP work for Dental Assisting?", "50% unfunded course fee support"),
+        ("Can I pay by PayNow for Dental Assisting?", "201841969G"),
+        ("What is the minimum qualification for Dental Assisting?", "GCE 'N' Levels"),
+        ("Will I get a job after the Dental Assisting course?", "job opportunities for suitable candidates"),
+        ("What is the Dental Assisting course website?", "qandm.edu.sg/Courses/Dental-Assistant"),
     )
-    replies = [send(client, conversation_id, prompt).get_json()["message"]["content"] for prompt in prompts]
-    for reply in replies:
-        assert "confirm" in reply.casefold() or "not been supplied" in reply.casefold()
-    combined = " ".join(replies)
-    assert "201841969G" not in combined
-    assert "Clementi Loop" not in combined
+    for prompt, expected in expectations:
+        reply = send(client, conversation_id, prompt).get_json()["message"]["content"]
+        assert expected in reply, prompt
+    venue = send(client, conversation_id, "Where is the Dental Assisting course venue?").get_json()["message"]["content"]
+    # The supplied sources conflict on venue, so it still requires staff confirmation.
+    assert "confirm" in venue.casefold()
+    assert "Clementi Loop" not in venue
+
+
+def test_skillsfuture_reply_guides_balance_check_without_singpass_access(client, conversation_id):
+    reply = send(client, conversation_id, "How do I check my SkillsFuture balance?").get_json()["message"]["content"]
+    assert "https://sfc.myskillsfuture.gov.sg/claim" in reply
+    assert "You may login into the Skillsfuture Portal to find out the balance" in reply
 
 
 def test_enrollment_process_question_preserves_strict_sequence(client, conversation_id):
@@ -106,7 +114,9 @@ def test_enrollment_process_question_preserves_strict_sequence(client, conversat
 def test_payment_fields_and_screenshots_are_not_collected(client, conversation_id):
     payment = send(client, conversation_id, "Wat are the paymnt options?").get_json()["message"]["content"]
     screenshot = send(client, conversation_id, "Can I send my payment screenshot by WhatsApp?").get_json()["message"]["content"]
-    assert "Payment instructions have not been supplied" in payment
+    assert "2) Paynow. UEN: 201841969G" in payment
+    assert "not eligible for Midcareer Skillsfuture credits" in payment
+    assert "Front Desk Operations have not been confirmed" in payment
     assert "does not collect payment screenshots" in screenshot
     assert "email or WhatsApp" not in screenshot
 
@@ -127,8 +137,8 @@ def test_enrollment_routes_to_agent_without_selecting(client, conversation_id):
     assert payload["routing"]["intent"] == "enrollment"
     assert payload["routing"]["agent"] == "enrollment_agent"
     assert payload["enrollment"]["course_id"] is None
-    assert "S$600 nett" in payload["message"]["content"]
-    assert "S$450 nett" in payload["message"]["content"]
+    assert "$600 nett" in payload["message"]["content"]
+    assert "$450 nett" in payload["message"]["content"]
 
 
 def test_fabricated_high_risk_facts_are_replaced_with_grounded_copy(tmp_path):
@@ -142,7 +152,7 @@ def test_fabricated_high_risk_facts_are_replaced_with_grounded_copy(tmp_path):
     reply = send(client, conversation_id, "Why is this course so expensive?").get_json()["message"]["content"]
     assert "S$999" not in reply
     assert "1 January 2030" not in reply
-    assert "S$600 nett" in reply and "S$450 nett" in reply
+    assert "$600 nett" in reply and "$450 nett" in reply
 
 
 def test_customer_reply_hides_internal_terminology(client, conversation_id):

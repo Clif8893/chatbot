@@ -14,6 +14,11 @@ class IntentClassification(BaseModel):
 class FAQAnswer(BaseModel):
     answer: str = Field(min_length=1)
     matched_topics: list[str] = Field(default_factory=list)
+    # Set only when the question clearly concerns one specific course.
+    course_ids: list[str] = Field(default_factory=list)
+    # When no approved topic answers: a short phrase naming what was asked about,
+    # used to frame the "no confirmed information" reply. Never contains facts.
+    unanswered_subject: str = ""
 
 
 class EnrollmentFields(BaseModel):

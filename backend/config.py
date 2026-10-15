@@ -124,6 +124,10 @@ class Config:
         int(value)
         for value in os.getenv("FOLLOWUP_HOURS", "48,96,144").split(",")
     )
+    # False: leads who message first may receive reminders until they reply STOP.
+    FOLLOWUP_REQUIRE_EXPLICIT_CONSENT = _boolean_setting(
+        "FOLLOWUP_REQUIRE_EXPLICIT_CONSENT", False
+    )
 
     EMAIL_DELIVERY_ENABLED = _boolean_setting("EMAIL_DELIVERY_ENABLED", False)
     EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp").strip().casefold()

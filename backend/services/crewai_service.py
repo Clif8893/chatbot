@@ -82,13 +82,31 @@ class CrewAIService:
             description=(
                 "Answer the CURRENT QUESTION using ONLY the supplied approved course "
                 "information. Select the exact topic name of the closest approved FAQ "
-                "template and return it in matched_topics. Select 'course fee concern' "
+                "template and return it in matched_topics. Choose the NARROWEST topic "
+                "that answers exactly what was asked and nothing more: 'course dates' "
+                "for dates or schedules, 'course fee and value' for fees, 'duration and "
+                "timing' for hours, 'course content' for what is taught. Use 'course "
+                "description' only for a general request such as 'tell me about the "
+                "course'.Select 'course fee concern' "
                 "when the participant questions why the course is expensive or raises "
                 "a concern about its price; use 'course fee and value' for a normal fee "
                 "or schedule question. Use more than one "
                 "topic only when the question clearly asks about more than one subject. "
+                "Set course_ids to the id of a course ONLY when the CURRENT QUESTION "
+                "clearly asks about that one specific course, for example by a "
+                "misspelt or descriptive name, or by pointing to a course discussed in "
+                "the recent context. Leave course_ids empty when the question is "
+                "general, says 'your course', 'the course' or 'courses', or concerns "
+                "every course; the application then answers for all courses. "
                 "If no approved topic answers the question, return an empty "
-                "matched_topics list and the staff_confirmation_message. The "
+                "matched_topics list and the staff_confirmation_message, and set "
+                "unanswered_subject to a short phrase (at most 10 words) naming what "
+                "the participant asked about, written to read naturally after "
+                "'I don’t have confirmed information about', for example 'parking at "
+                "the training venue', 'bringing a child to class', 'whether lunch is "
+                "provided', 'whether the course is taught in Mandarin' or 'whether the "
+                "front desk course is held online'. It must contain no facts, numbers, "
+                "prices, dates, promises or advice. The "
                 "application will render the approved template, so do not shorten "
                 "or freely paraphrase it. Treat "
                 "conflict and confirmation_required fields as mandatory cautions. Never "
@@ -107,7 +125,8 @@ class CrewAIService:
             ),
             expected_output=(
                 "A structured FAQ selection with matched_topics set to exact topic "
-                "names from faqs, grounded only in the supplied course information."
+                "names from faqs and course_ids empty unless one specific course is "
+                "clearly asked about, grounded only in the supplied course information."
             ),
             agent=agent,
             output_pydantic=FAQAnswer,

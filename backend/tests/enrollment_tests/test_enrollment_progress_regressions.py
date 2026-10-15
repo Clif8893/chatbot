@@ -88,12 +88,13 @@ def test_database_backed_intake_query_lists_all_approved_choices(tmp_path, fake_
     ).get_json()
     content = response["message"]["content"]
     assert "Available Intake Dates" in content
-    assert "18–19 November 2026 — Weekdays — Open" in content
-    assert "28–29 November 2026 — Weekend — Open" in content
-    assert "16–17 December 2026 — Weekdays — Open" in content
-    assert "2 December 2026 — Wednesday — Open" in content
-    assert "9 January 2027 — Saturday — Open" in content
-    assert "3 February 2027 — Wednesday — Open" in content
+    assert "18–19 November 2026 — Weekdays" in content
+    assert "28–29 November 2026 — Weekends" in content
+    assert "16–17 December 2026 — Weekdays" in content
+    assert "2 December 2026 — Weekday" in content
+    assert "9 January 2027 — Weekend" in content
+    assert "3 February 2027 — Weekday" in content
+    assert "— Open" not in content
     assert "dates are being updated" not in content
     assert fake_ai.classify_calls == []
     assert fake_ai.faq_calls == []

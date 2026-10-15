@@ -1,20 +1,24 @@
 {
   "content_status": {
-    "last_reviewed": "2026-10-13",
-    "source_priority": ["planned integrated-version course data supplied for this task"],
+    "last_reviewed": "2026-10-14",
+    "source_priority": [
+      "planned integrated-version course data supplied for this task (course list, fees, durations and intakes)",
+      "2 days DA course Reply Template (Basic Certificate in Dental Assisting funding, payment, entry and job replies)"
+    ],
     "retired_course_ids": ["dental-infection-control"]
   },
   "reply_style": {
     "tone": "Warm, helpful and natural",
     "language": "Concise Singapore/British English",
     "emoji_guidance": "Use relevant emojis sparingly. Do not use emojis in sensitive validation or privacy messages.",
-    "staff_confirmation_message": "I’m sorry, I don’t have confirmed information about that at the moment. Our team will need to confirm it for you."
+    "staff_confirmation_message": "I’m sorry, I don’t have confirmed information about that at the moment. Our team will need to confirm it for you.",
+    "unanswered_template": "I’m sorry, I don’t have confirmed information about {subject} at the moment. Our team will need to confirm it for you."
   },
   "course": {
     "id": "dental-assisting-basic",
     "code": "",
     "name": "Basic Certificate in Dental Assisting",
-    "overview": "",
+    "overview": "This beginner-friendly, practical course introduces essential dental-assisting skills, including recognising dental instruments and materials, infection control, and anticipating a dentist’s needs during procedures.",
     "fee": {"amount": 600, "currency": "SGD", "display": "S$600 nett"},
     "duration": "Two consecutive training days",
     "training_time": "9:30am to 5:30pm on each training day",
@@ -22,6 +26,29 @@
       "confirmation_required": true,
       "customer_reply": "The exact training venue has not been confirmed. Our team will need to confirm it for you."
     },
+    "website": "https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting",
+    "minimum_qualification": "GCE N Levels are preferred. Applicants without GCE N Levels may still be considered if they have basic English reading and writing skills, as the assessment is conducted in English.",
+    "job_opportunities": "Suitable candidates may be offered job opportunities on the last day of the class, subject to the normal HR selection process. Employment is not guaranteed.",
+    "skillsfuture": {
+      "basic_tier_accepted": true,
+      "mid_career_tier_accepted": false,
+      "claim_page": "https://sfc.myskillsfuture.gov.sg/claim",
+      "customer_reply": "You may use basic-tier SkillsFuture Credits for this course. Mid-Career SkillsFuture Credits cannot be used. Please check your basic-tier balance on the SkillsFuture portal. You will need to submit your own claim."
+    },
+    "utap": {
+      "available_to": "eligible NTUC Union members",
+      "support": "50% of the unfunded course fee, up to S$250 per year or S$500 per year for NTUC members aged 40 and above"
+    },
+    "paynow": {
+      "accepted": true,
+      "uen": "201841969G",
+      "customer_reply": "PayNow is accepted using UEN 201841969G. Payment arrangements are handled after enrolment confirmation."
+    },
+    "payment_options": [
+      "basic-tier SkillsFuture Credits (Mid-Career SkillsFuture Credits cannot be used)",
+      "PayNow to UEN 201841969G",
+      "UTAP reimbursement for eligible NTUC Union members (pay upfront, claim after the course; cannot be combined with SkillsFuture Credits)"
+    ],
     "intakes": [
       {
         "id": "dental-assisting-2026-11-18",
@@ -44,7 +71,7 @@
         "end_date": "2026-11-29",
         "start_time": "09:30",
         "end_time": "17:30",
-        "intake_type": "Weekend",
+        "intake_type": "Weekends",
         "display_date": "28–29 November 2026",
         "capacity": 20,
         "participant_count": 0,
@@ -120,7 +147,8 @@
       "id": "dental-clinic-front-desk-operations",
       "code": "",
       "name": "Certificate in Dental Clinic Front Desk Operations",
-      "overview": "",
+      "overview": "This practical one-day course introduces the essential skills for working at the front desk of a dental clinic, including welcoming and registering patients, managing appointments and enquiries, communicating professionally in person and over the phone, and handling patient records and personal data with care.",
+      "overview_status": "Drafted for the prototype; requires Q&M approval before production use.",
       "fee": {"amount": 450, "currency": "SGD", "display": "S$450 nett"},
       "duration": "One training day",
       "training_time": null,
@@ -134,7 +162,7 @@
           "course_id": "dental-clinic-front-desk-operations",
           "start_date": "2026-12-02",
           "end_date": "2026-12-02",
-          "intake_type": "Wednesday",
+          "intake_type": "Weekday",
           "display_date": "2 December 2026",
           "capacity": 20,
           "participant_count": 0,
@@ -146,7 +174,7 @@
           "course_id": "dental-clinic-front-desk-operations",
           "start_date": "2027-01-09",
           "end_date": "2027-01-09",
-          "intake_type": "Saturday",
+          "intake_type": "Weekend",
           "display_date": "9 January 2027",
           "capacity": 20,
           "participant_count": 0,
@@ -158,7 +186,7 @@
           "course_id": "dental-clinic-front-desk-operations",
           "start_date": "2027-02-03",
           "end_date": "2027-02-03",
-          "intake_type": "Wednesday",
+          "intake_type": "Weekday",
           "display_date": "3 February 2027",
           "capacity": 20,
           "participant_count": 0,
@@ -170,22 +198,47 @@
       "enrollment": {}
     }
   ],
+  "lead_nurturing": {
+    "welcome": "Thanks for your interest in Q&M’s dental courses. Would you like to learn more about the course, or would you like to enrol?",
+    "menu_footer": "Or simply type your question in your own words — for example, “Can I use SkillsFuture?” or “I’d like to talk to someone”.",
+    "menu_options": [
+      {"key": "1", "label": "About the courses", "faq_topics": ["course description"]},
+      {"key": "2", "label": "Fees and payment", "faq_topics": ["course fee and value", "payment options"], "ask_course": true},
+      {"key": "3", "label": "SkillsFuture and UTAP funding", "faq_topics": ["SkillsFuture", "UTAP"], "ask_course": true},
+      {"key": "4", "label": "Upcoming course dates", "faq_topics": ["course dates"], "ask_course": true},
+      {"key": "5", "label": "Entry requirements", "faq_topics": ["minimum qualification"], "ask_course": true},
+      {"key": "6", "label": "Job opportunities", "faq_topics": ["job opportunities"], "ask_course": true},
+      {"key": "7", "label": "Enrol now", "action": "enrol"},
+      {"key": "8", "label": "Talk to our team", "action": "staff"}
+    ],
+    "opt_out_notice": "If we don’t hear back, we may send you up to three short reminders about your enquiry. Reply STOP at any time to opt out.",
+    "opt_out_reply": "No problem — you won’t receive any more reminders from us. You can still message us any time if you have questions. If you would like to cancel an enrolment instead, just tell me.",
+    "human_handoff_reply": "I’ve passed your message to our team, and a staff member will get back to you as soon as possible. In the meantime, I’m happy to help with any course questions 😊",
+    "sensitive_handoff_reply": "Thank you for reaching out about {subject}. This needs our team’s attention, so I’ve passed your message to them, and a staff member will get back to you as soon as possible.",
+    "unanswered_handoff_note": "I’ve passed your question to our team, and a staff member will follow up with you.",
+    "followup_templates": [
+      "Hi! 👋 Just checking in on your enquiry about our dental courses. Do you have any questions about the courses, fees or funding? Reply 4 to see the upcoming dates or 7 to enrol. Reply STOP to opt out of reminders.",
+      "Hi again! We offer the Basic Certificate in Dental Assisting (2 days, S$600 nett; basic-tier SkillsFuture Credits can be used) and the Certificate in Dental Clinic Front Desk Operations (1 day, S$450 nett). Would you like help securing a place? Reply 7 to enrol or 8 to talk to our team. Reply STOP to opt out of reminders.",
+      "Hi! This is our last reminder about your dental course enquiry. If you are still interested, just reply and we’ll be happy to help you enrol or answer any questions. Reply STOP to opt out. Thank you! 😊"
+    ]
+  },
   "faqs": [
-    {"topic": "course description", "answer": "The currently planned courses are:\n\n1. Basic Certificate in Dental Assisting — S$600 nett — Two consecutive training days\n2. Certificate in Dental Clinic Front Desk Operations — S$450 nett — One training day"},
-    {"topic": "course fee and value", "answer": "The Basic Certificate in Dental Assisting is S$600 nett for both training days. The Certificate in Dental Clinic Front Desk Operations is S$450 nett. Please tell me which course you mean if you would like one course’s details."},
-    {"topic": "duration and timing", "answer": "The Basic Certificate in Dental Assisting runs for two consecutive training days. Its existing approved hours are 9:30am to 5:30pm on each training day. The Certificate in Dental Clinic Front Desk Operations runs for one training day; its training hours have not been confirmed."},
-    {"topic": "course fee concern", "answer": "The planned nett fees are S$600 for the Basic Certificate in Dental Assisting and S$450 for the Certificate in Dental Clinic Front Desk Operations. Our team will need to confirm any information beyond these approved fees."},
+    {"topic": "course description", "answer": "Hi !\n\nThank you for your interest in our courses. We currently offer:\n\n📚 Basic Certificate in Dental Assisting\nBelow are the available dates for the upcoming intake dates:\n{intakes:dental-assisting-basic}\nThe course fee is $600 nett for a duration of 2 consecutive days, from 930am to 530pm. For more details on the contents, please visit our website at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting. Payment wise, you may use Skillsfuture Credit to pay for the course fee.\n\n📚 Certificate in Dental Clinic Front Desk Operations\nBelow are the available dates for the upcoming intake dates:\n{intakes:dental-clinic-front-desk-operations}\nThe course fee is $450 nett for one training day. This practical course introduces the essential skills for working at the front desk of a dental clinic, including welcoming and registering patients, managing appointments and enquiries, communicating professionally in person and over the phone, and handling patient records and personal data with care.\n\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊", "course_answers": {"dental-assisting-basic": "Hi !\n\nThank you for your interest in our Basic Certificate in Dental Assisting course.\n\nBelow are the available dates for the upcoming intake dates:\n{intakes:dental-assisting-basic}\n\nThe course fee is $600 nett for a duration of 2 consecutive days, from 930am to 530pm. For more details on the contents, please visit our website at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting. Payment wise, you may use Skillsfuture Credit to pay for the course fee.\n\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊", "dental-clinic-front-desk-operations": "Hi !\n\nThank you for your interest in our Certificate in Dental Clinic Front Desk Operations course.\n\nBelow are the available dates for the upcoming intake dates:\n{intakes:dental-clinic-front-desk-operations}\n\nThe course fee is $450 nett for one training day. This practical course introduces the essential skills for working at the front desk of a dental clinic, including welcoming and registering patients, managing appointments and enquiries, communicating professionally in person and over the phone, and handling patient records and personal data with care.\n\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊"}},
+    {"topic": "course content", "answer": "📚 Basic Certificate in Dental Assisting\nDental Assisting is a valuable skill set that can be learned and developed with practice. During this 2-day class, you’ll be guided through your daily job scope such as\n\n・recognizing dental instruments & materials\n・infection control\n・how to anticipate the dentist’s needs during procedures\n\nWith consistent practice and hands-on experience, you’ll build confidence and become more proficient in assisting.\n\n📚 Certificate in Dental Clinic Front Desk Operations\nDuring this 1-day class, you’ll learn the essentials of working at the front desk of a dental clinic, such as\n\n・welcoming and registering patients\n・managing appointments and patient enquiries\n・communicating professionally in person and over the phone\n・handling patient records and personal data with care", "course_answers": {"dental-assisting-basic": "Dental Assisting is a valuable skill set that can be learned and developed with practice. During this 2-day class, you’ll be guided through your daily job scope such as\n\n・recognizing dental instruments & materials\n・infection control\n・how to anticipate the dentist’s needs during procedures\n\nWith consistent practice and hands-on experience, you’ll build confidence and become more proficient in assisting.", "dental-clinic-front-desk-operations": "During this 1-day class, you’ll learn the essentials of working at the front desk of a dental clinic, such as\n\n・welcoming and registering patients\n・managing appointments and patient enquiries\n・communicating professionally in person and over the phone\n・handling patient records and personal data with care"}},
+    {"topic": "course fee and value", "answer": "Basic Certificate in Dental Assisting: The course fee is $600 nett for a duration of 2 consecutive days, from 930am to 530pm.\n\nCertificate in Dental Clinic Front Desk Operations: The course fee is $450 nett for one training day.", "course_answers": {"dental-assisting-basic": "The course fee is $600 nett for a duration of 2 consecutive days, from 930am to 530pm.", "dental-clinic-front-desk-operations": "The course fee for the Certificate in Dental Clinic Front Desk Operations is $450 nett for one training day."}},
+    {"topic": "duration and timing", "answer": "Basic Certificate in Dental Assisting: The course is for a duration of 2 consective days, from 930am to 530pm.\n\nCertificate in Dental Clinic Front Desk Operations: One training day; the training hours have not been confirmed yet. Our team will need to confirm them for you.", "course_answers": {"dental-assisting-basic": "The course is for a duration of 2 consective days, from 930am to 530pm.", "dental-clinic-front-desk-operations": "The Certificate in Dental Clinic Front Desk Operations runs for one training day. Its training hours have not been confirmed yet; our team will need to confirm them for you."}},
+    {"topic": "course fee concern", "answer": "Thank you for your feedback regarding the course fee. We understand that cost is an important consideration, and we strive to ensure that our pricing reflects the value and quality of the education and resources provided.\n\nThe fee for our 2-day course includes comprehensive materials, expert instruction, and access to specialized equipment and facilities. We believe this investment will greatly benefit your professional development and skillset. Our 1-day Certificate in Dental Clinic Front Desk Operations is $450 nett, and our team will be happy to explain what the fee covers.\n\nHowever, we do appreciate your concerns and will take them into consideration for future planning. If there are specific aspects of the course or pricing you'd like to discuss further, please feel free to reach out :)", "course_answers": {"dental-assisting-basic": "Thank you for your feedback regarding the course fee. We understand that cost is an important consideration, and we strive to ensure that our pricing reflects the value and quality of the education and resources provided.\n\nThe fee for our 2-day course includes comprehensive materials, expert instruction, and access to specialized equipment and facilities. We believe this investment will greatly benefit your professional development and skillset.\n\nHowever, we do appreciate your concerns and will take them into consideration for future planning. If there are specific aspects of the course or pricing you'd like to discuss further, please feel free to reach out :)", "dental-clinic-front-desk-operations": "Thank you for your feedback regarding the course fee. We understand that cost is an important consideration, and we strive to ensure that our pricing reflects the value and quality of the education and resources provided.\n\nOur 1-day Certificate in Dental Clinic Front Desk Operations is $450 nett, and our team will be happy to explain what the fee covers.\n\nHowever, we do appreciate your concerns and will take them into consideration for future planning. If there are specific aspects of the course or pricing you'd like to discuss further, please feel free to reach out :)"}},
     {"topic": "venue", "answer": "The exact training venue has not been confirmed. Our team will need to confirm it for you."},
     {"topic": "course dates", "answer": "Use the configured intake list and do not invent additional dates."},
-    {"topic": "SkillsFuture", "answer": "SkillsFuture eligibility has not been confirmed for these planned courses. Our team will need to confirm it for you."},
-    {"topic": "Mid-Career SkillsFuture", "answer": "SkillsFuture eligibility has not been confirmed for these planned courses. Our team will need to confirm it for you."},
-    {"topic": "PayNow", "answer": "Payment instructions have not been supplied for these planned courses. Our team will need to confirm them for you."},
-    {"topic": "UTAP", "answer": "UTAP eligibility has not been confirmed for these planned courses. Our team will need to confirm it for you."},
-    {"topic": "payment options", "answer": "Payment instructions have not been supplied for these planned courses. Our team will need to confirm them for you."},
-    {"topic": "minimum qualification", "answer": "Entry requirements have not been confirmed for these planned courses. Our team will need to confirm them for you."},
-    {"topic": "job opportunities", "answer": "Employment information has not been supplied for these planned courses. Our team will need to confirm it for you."},
-    {"topic": "course website", "answer": "An approved course webpage has not been supplied for these planned courses. Our team will need to confirm it for you."},
-    {"topic": "invoice and claim guidance", "answer": "After confirmation, the enrollment invoice shows the selected course or courses and their approved nett fees. Funding and payment claims have not been confirmed."},
+    {"topic": "SkillsFuture", "answer": "There are two tiers of SkillsFuture Credit. The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\". You cannot use Midcareer Skillsfuture Credit to pay for this course.\n\nYou may login into the Skillsfuture Portal to find out the balance of your \"Basic Tier\" skillsfuture credits using https://sfc.myskillsfuture.gov.sg/claim.", "course_answers": {"dental-assisting-basic": "There are two tiers of SkillsFuture Credit. The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\". You cannot use Midcareer Skillsfuture Credit to pay for this course.\n\nYou may login into the Skillsfuture Portal to find out the balance of your \"Basic Tier\" skillsfuture credits using https://sfc.myskillsfuture.gov.sg/claim.", "dental-clinic-front-desk-operations": "The eligibility of \"Basic Tier\" Skillsfuture Credits and UTAP for the Certificate in Dental Clinic Front Desk Operations has not been confirmed yet."}},
+    {"topic": "Mid-Career SkillsFuture", "answer": "There are two tiers of SkillsFuture Credit. The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\". You cannot use Midcareer Skillsfuture Credit to pay for this course.\n\nYou may login into the Skillsfuture Portal to find out the balance of your \"Basic Tier\" skillsfuture credits using https://sfc.myskillsfuture.gov.sg/claim.", "course_answers": {"dental-assisting-basic": "There are two tiers of SkillsFuture Credit. The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\". You cannot use Midcareer Skillsfuture Credit to pay for this course.\n\nYou may login into the Skillsfuture Portal to find out the balance of your \"Basic Tier\" skillsfuture credits using https://sfc.myskillsfuture.gov.sg/claim.", "dental-clinic-front-desk-operations": "The eligibility of \"Basic Tier\" Skillsfuture Credits and UTAP for the Certificate in Dental Clinic Front Desk Operations has not been confirmed yet."}},
+    {"topic": "PayNow", "answer": "You may pay via Paynow. UEN: 201841969G\n\nPayment methods for the Certificate in Dental Clinic Front Desk Operations have not been confirmed yet.", "course_answers": {"dental-assisting-basic": "You may pay via Paynow. UEN: 201841969G", "dental-clinic-front-desk-operations": "Payment methods for the Certificate in Dental Clinic Front Desk Operations have not been confirmed yet."}},
+    {"topic": "UTAP", "answer": "All NTUC Union members are eligible for 50% unfunded course fee support, up to $250 per year (or up to $500 per year for NTUC members aged 40 and above) through the Union Training Assistance Programme (UTAP).\n\nHow to Apply for UTAP Funding Support:\nStep 1: Ensure your NTUC Union membership is valid. You can check your membership status by:\n- Chatting with NTUC’s Chat Bot at ntuc.co/chat\n- Logging into your U Portal at www.ntuc.org.sg\n\nStep 2: Enroll in the course and attend both days of training.\n\nStep 3: After completing the course, log in to your U Portal account here (https://www.ntuc.org.sg/wps/portal/up2/home/eserviceslanding?id=6bc1ca2c-ce81-4acb-a28f-c0be586e185f) to submit your UTAP claim.You will need the following documents to complete your claim:\n- Proof of Payment (e.g., Course Invoice/Receipt)\n- Proof of Completion (e.g., Certificate/Results Slip)\nBoth documents will be provided to you after the course.\nImportant: Please submit your UTAP claim within 6 months of course completion. Late submissions will not be accepted.\n\nThe eligibility of \"Basic Tier\" Skillsfuture Credits and UTAP for the Certificate in Dental Clinic Front Desk Operations has not been confirmed yet.", "course_answers": {"dental-assisting-basic": "All NTUC Union members are eligible for 50% unfunded course fee support, up to $250 per year (or up to $500 per year for NTUC members aged 40 and above) through the Union Training Assistance Programme (UTAP).\n\nHow to Apply for UTAP Funding Support:\nStep 1: Ensure your NTUC Union membership is valid. You can check your membership status by:\n- Chatting with NTUC’s Chat Bot at ntuc.co/chat\n- Logging into your U Portal at www.ntuc.org.sg\n\nStep 2: Enroll in the course and attend both days of training.\n\nStep 3: After completing the course, log in to your U Portal account here (https://www.ntuc.org.sg/wps/portal/up2/home/eserviceslanding?id=6bc1ca2c-ce81-4acb-a28f-c0be586e185f) to submit your UTAP claim.You will need the following documents to complete your claim:\n- Proof of Payment (e.g., Course Invoice/Receipt)\n- Proof of Completion (e.g., Certificate/Results Slip)\nBoth documents will be provided to you after the course.\nImportant: Please submit your UTAP claim within 6 months of course completion. Late submissions will not be accepted.", "dental-clinic-front-desk-operations": "The eligibility of \"Basic Tier\" Skillsfuture Credits and UTAP for the Certificate in Dental Clinic Front Desk Operations has not been confirmed yet."}},
+    {"topic": "payment options", "answer": "There are three modes of payment.\n\n1) Skillsfuture Credit Base tier\n(Please note that our course is not eligible for Midcareer Skillsfuture credits)\n\n2) Paynow. UEN: 201841969G\n\n3) NTUC Union Membership: 50% off course fee. You'll have to pay upfront first and get reimbursed after completion of course. You are not able to use both Skillsfuture credit and Union member fee. Can only use either uTap or Skillsfuture Credits\n\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊\n\nPayment methods for the Certificate in Dental Clinic Front Desk Operations have not been confirmed yet.", "course_answers": {"dental-assisting-basic": "There are three modes of payment.\n\n1) Skillsfuture Credit Base tier\n(Please note that our course is not eligible for Midcareer Skillsfuture credits)\n\n2) Paynow. UEN: 201841969G\n\n3) NTUC Union Membership: 50% off course fee. You'll have to pay upfront first and get reimbursed after completion of course. You are not able to use both Skillsfuture credit and Union member fee. Can only use either uTap or Skillsfuture Credits\n\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊", "dental-clinic-front-desk-operations": "Payment methods for the Certificate in Dental Clinic Front Desk Operations have not been confirmed yet."}},
+    {"topic": "minimum qualification", "answer": "We prefer candidates with GCE 'N' Levels. However, if you do not have GCE 'N' Levels, we are open to considering candidates who have basic reading and writing skills in English, as the assessment will be conducted in English. :)", "course_answers": {"dental-assisting-basic": "We prefer candidates with GCE 'N' Levels. However, if you do not have GCE 'N' Levels, we are open to considering candidates who have basic reading and writing skills in English, as the assessment will be conducted in English. :)", "dental-clinic-front-desk-operations": "Entry requirements for the Certificate in Dental Clinic Front Desk Operations have not been confirmed yet. Our team will need to confirm them for you."}},
+    {"topic": "job opportunities", "answer": "We do offer job opportunities for suitable candidates on the last day of the class.\n\nSelection process from the HR involves various contributing factors to ensure we find the best fit for the role. Factors includes\n- Location of work place\n- Schedule\n- Skills and Experience\n- Cultural Fit\n- Interview Performance", "course_answers": {"dental-assisting-basic": "We do offer job opportunities for suitable candidates on the last day of the class.\n\nSelection process from the HR involves various contributing factors to ensure we find the best fit for the role. Factors includes\n- Location of work place\n- Schedule\n- Skills and Experience\n- Cultural Fit\n- Interview Performance", "dental-clinic-front-desk-operations": "Information on job opportunities after the Certificate in Dental Clinic Front Desk Operations has not been supplied yet. Our team will need to confirm it for you."}},
+    {"topic": "course website", "answer": "For more details on the contents, please visit our website at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting.", "course_answers": {"dental-assisting-basic": "For more details on the contents, please visit our website at https://qandm.edu.sg/Courses/Dental-Assistant/4/Basic-Certificate-In-Dental-Assisting.", "dental-clinic-front-desk-operations": "A course webpage for the Certificate in Dental Clinic Front Desk Operations has not been supplied yet. Our team will need to confirm it for you."}},
+    {"topic": "invoice and claim guidance", "answer": "Invoice Guidance\n\nAfter your enrolment is confirmed, we will prepare an invoice for your selected course or courses and email it to your registered address. If you are using basic-tier SkillsFuture Credits for the Basic Certificate in Dental Assisting, you will submit the claim yourself on https://sfc.myskillsfuture.gov.sg/claim using the invoice. Funding for the Certificate in Dental Clinic Front Desk Operations has not been confirmed yet.", "course_answers": {"dental-assisting-basic": "Invoice Guidance\n\nAfter your enrolment is confirmed, we will prepare an invoice for the Basic Certificate in Dental Assisting and email it to your registered address. If you are using basic-tier SkillsFuture Credits, you will submit the claim yourself on https://sfc.myskillsfuture.gov.sg/claim using the invoice.", "dental-clinic-front-desk-operations": "Invoice Guidance\n\nAfter your enrolment is confirmed, we will prepare an invoice for the Certificate in Dental Clinic Front Desk Operations and email it to your registered address. Funding for this course has not been confirmed yet."}},
     {"topic": "payment screenshot channel", "answer": "The enrollment chat does not collect payment screenshots. Our team will need to confirm any payment-document process separately."},
     {"topic": "enrolment process", "answer": "Choose one or both courses, select one valid intake for each course, provide your participant particulars, review the summary, and explicitly confirm."}
   ]

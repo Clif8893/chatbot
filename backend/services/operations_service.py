@@ -14,6 +14,7 @@ from backend.models.operations import (
     AuditEvent, CatalogueContent, ConsentRecord, ContactMapping, CourseDate,
     FollowupRun, Lead, StaffEscalation,
 )
+from backend.services.lead_nurturing import WELCOME_MENU_FOLLOWUP
 from backend.services.privacy import mask_nrics_in_text, mask_nric
 
 
@@ -196,9 +197,16 @@ class OperationsService:
     def run_followups(self, now=None):
         now = aware(now or utc_now())
         queued = []
+        # Leads who contacted Q&M first are told in the first reply that they may
+        # receive reminders and can reply STOP; an explicit withdrawal always wins.
+        explicit_consent_required = current_app.config.get("FOLLOWUP_REQUIRE_EXPLICIT_CONSENT", False)
         for lead in Lead.query.filter_by(status="awaiting_response").order_by(Lead.created_at).all():
             consent = self.consent_for(lead.conversation_id)
-            if not consent or not consent.granted or not lead.recipient or lead.channel not in {"email", "whatsapp"} or not lead.last_contact_at:
+            if consent is not None and not consent.granted:
+                continue
+            if consent is None and explicit_consent_required:
+                continue
+            if not lead.recipient or lead.channel not in {"email", "whatsapp"} or not lead.last_contact_at:
                 continue
             draft = EnrollmentDraft.query.filter_by(conversation_id=lead.conversation_id).first()
             if draft and draft.status not in {"collecting", "awaiting_confirmation"}:
@@ -220,27 +228,38 @@ class OperationsService:
                 continue
             row = FollowupRun(lead_id=lead.id, sequence=lead.sequence, step=step, created_at=now)
             hours = self.followup_hours[step]
-            body = (f"Following up on your enquiry about {self.catalogue.course_name}. "
-                    "You can ask about fees or available dates, or tell us you would like to register. "
-                    "Reply STOP to stop reminders or ask for a member of our team.")
+            body = self.followup_body(step)
+            conversation = self._conversation(lead.conversation_id)
             # The unique step constraint also protects concurrent scheduler workers.
             # Reserve the step and persist its outbox row in the same savepoint.
             try:
                 with db.session.begin_nested():
                     db.session.add(row)
                     db.session.flush()
-                    delivery = self.notify(lead.channel, lead.recipient, "Dental assisting course enquiry follow-up", body,
+                    delivery = self.notify(lead.channel, lead.recipient, "Q&M dental course enquiry follow-up", body,
                                            lead.conversation_id, f"lead_followup_{hours:g}h")
                     row.delivery_id = delivery.id
                     lead.followup_count = len(completed) + 1
                     if lead.followup_count == len(self.followup_hours):
                         lead.status = "timed_out"
+                    if conversation.pending_followup is None and conversation.pending_action is None:
+                        # Reminders invite numbered replies, so re-open the quick-reply menu.
+                        conversation.pending_followup = WELCOME_MENU_FOLLOWUP
                     self.audit("followup_queued", f"Step {step + 1} at {hours:g} hours", lead.conversation_id)
             except IntegrityError:
                 continue
             queued.append(row.id)
         db.session.commit()
         return {"queued": len(queued), "followup_ids": queued}
+
+    def followup_body(self, step):
+        """Staff-approved reminder wording for a zero-based follow-up step."""
+        templates = self.catalogue.lead_nurturing.get("followup_templates") or []
+        if templates:
+            return templates[min(step, len(templates) - 1)]
+        return ("Following up on your enquiry about our dental courses. "
+                "You can ask about fees or available dates, or tell us you would like to register. "
+                "Reply STOP to stop reminders or ask for a member of our team.")
 
     def update_lead(self, lead_id, payload, actor="staff"):
         lead = db.session.get(Lead, lead_id)
@@ -484,9 +503,22 @@ class OperationsService:
                     raise ValueError(f"Unsupported content field {key}.")
         if "faqs" in payload:
             faqs = payload["faqs"]
-            if not isinstance(faqs, list) or len(faqs) > 100 or any(not isinstance(item, dict) or set(item) != {"topic", "answer"}
-                    or not all(isinstance(v, str) and 0 < len(v.strip()) <= 10000 for v in item.values()) for item in faqs):
-                raise ValueError("FAQs must be up to 100 objects with nonempty topic and answer text.")
+            course_ids = {course["id"] for course in self.catalogue.courses}
+
+            def valid_text(value):
+                return isinstance(value, str) and 0 < len(value.strip()) <= 10000
+
+            def valid_faq(item):
+                # course_answers optionally overrides the answer for one named course.
+                if not isinstance(item, dict) or not {"topic", "answer"} <= set(item) <= {"topic", "answer", "course_answers"}:
+                    return False
+                course_answers = item.get("course_answers", {})
+                return (valid_text(item["topic"]) and valid_text(item["answer"]) and isinstance(course_answers, dict)
+                        and set(course_answers) <= course_ids and all(valid_text(v) for v in course_answers.values()))
+
+            if not isinstance(faqs, list) or len(faqs) > 100 or not all(valid_faq(item) for item in faqs):
+                raise ValueError("FAQs must be up to 100 objects with nonempty topic and answer text, "
+                                 "plus optional per-course answers for current courses.")
             current["faqs"] = deepcopy(faqs)
         # Dates and financial fee values are managed by their dedicated workflows.
         current["course"].pop("intakes", None)

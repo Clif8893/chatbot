@@ -1996,6 +1996,23 @@ function ContentEditor({ content, action, working }) {
   const [form, setForm] = useState(content);
   useEffect(() => setForm(content), [content]);
   const course = form.course || {};
+  const courseNames = Object.fromEntries(
+    [form.course, ...(form.additional_courses || [])]
+      .filter(Boolean)
+      .map((item) => [item.id, item.name]),
+  );
+  const setFaqCourseAnswer = (index, courseId, value) =>
+    setForm((current) => ({
+      ...current,
+      faqs: current.faqs.map((item, itemIndex) =>
+        itemIndex === index
+          ? {
+              ...item,
+              course_answers: { ...item.course_answers, [courseId]: value },
+            }
+          : item,
+      ),
+    }));
   const setCourse = (key, value) =>
     setForm((current) => ({
       ...current,
@@ -2109,7 +2126,7 @@ function ContentEditor({ content, action, working }) {
               />
             </label>
             <label>
-              Answer
+              {faq.course_answers ? "Answer when no course is named" : "Answer"}
               <textarea
                 value={faq.answer}
                 rows={3}
@@ -2126,6 +2143,19 @@ function ContentEditor({ content, action, working }) {
                 required
               />
             </label>
+            {Object.entries(faq.course_answers || {}).map(([courseId, text]) => (
+              <label key={courseId}>
+                Answer for {courseNames[courseId] || courseId}
+                <textarea
+                  value={text}
+                  rows={3}
+                  onChange={(event) =>
+                    setFaqCourseAnswer(index, courseId, event.target.value)
+                  }
+                  required
+                />
+              </label>
+            ))}
             <button
               className="text-button danger-text"
               type="button"

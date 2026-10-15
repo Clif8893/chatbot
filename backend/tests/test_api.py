@@ -77,7 +77,7 @@ def test_messages_are_persisted_and_reloadable(client, conversation_id):
     assert all(message["agent_name"] == "faq_agent" for message in messages)
     assert all(message["detected_intent"] == "faq" for message in messages)
     assert all(message["error_category"] is None for message in messages)
-    assert "two consecutive training days" in messages[1]["content"].casefold()
+    assert "2 consective days" in messages[1]["content"]
 
 
 def test_previous_chat_list_is_owned_ordered_and_masks_nric(app, client):

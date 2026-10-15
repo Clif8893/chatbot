@@ -201,6 +201,9 @@ def register_integrations(app, repository, catalogue, ai_factory, consent_state)
                 enrollment_management_service=app.extensions.get(
                     "enrollment_management"
                 ),
+                enrollment_resolver=app.extensions.get("enrollment_resolver"),
+                operations_service=operations,
+                channel=row.channel,
             )
             response = service.respond(conversation, text or "Hello")
             reply = response["message"]["content"]

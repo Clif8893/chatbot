@@ -86,3 +86,7 @@ Thumbs.db
 Desktop.ini
 ~$*
 /chatbot_transfer.zip
+
+# Local pytest temp output
+.pytest-local/
+.pytest-run-*/
