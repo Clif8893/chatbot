@@ -60,16 +60,17 @@ def test_first_contact_greeting_presents_numbered_quick_reply_menu(app, client, 
     assert "learn more about the course" in reply
     for label in ("1. About the courses", "3. SkillsFuture and UTAP funding", "7. Enrol now", "8. Talk to our team"):
         assert label in reply
-    assert payload["routing"]["intent"] == "unclear"
-    assert fake_ai.classify_calls == []
+    assert payload["routing"]["intent"] == "small_talk"
+    assert payload["routing"]["handler"] == "crewai"
+    assert len(fake_ai.classify_calls) == 1
     with app.app_context():
         assert db.session.get(Conversation, conversation_id).pending_followup == WELCOME_MENU_FOLLOWUP
 
 
-def test_facebook_style_generic_first_message_gets_course_intro_and_menu(client, conversation_id):
+def test_facebook_style_generic_first_message_gets_natural_course_intro(client, conversation_id):
     reply = content(send(client, conversation_id, "Hello! Can I get more info on this?"))
     assert "Thank you for your interest in our courses" in reply
-    assert "Reply with a number:" in reply
+    assert "Reply with a number" not in reply
 
 
 def test_menu_number_answers_from_approved_content_without_the_model(client, conversation_id, fake_ai):
@@ -78,7 +79,7 @@ def test_menu_number_answers_from_approved_content_without_the_model(client, con
     reply = content(send(client, conversation_id, "1"))
     assert "The Basic Certificate in Dental Assisting course is only eligible for the \"Basic Tier\"" in reply
     assert "UTAP" in reply
-    assert "Reply with another number" in reply
+    assert "ask in your own words" in reply
     assert fake_ai.faq_calls == []
     entry = content(send(client, conversation_id, "5"))
     assert "GCE 'N' Levels" in entry
@@ -122,7 +123,7 @@ def test_asking_for_help_or_the_menu_shows_options(client, conversation_id):
     send(client, conversation_id, "What is the course fee?")
     for message in ("help", "Show me the options", "menu"):
         reply = content(send(client, conversation_id, message))
-        assert "Reply with a number:" in reply
+        assert "ask in your own words" in reply
         assert "/help" not in reply
 
 

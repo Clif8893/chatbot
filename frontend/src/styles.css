@@ -31,9 +31,16 @@ body {
   margin: 0;
   padding: 18px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   background: linear-gradient(145deg, #e5f1ec 0%, #f5f0e9 100%);
   color: var(--text-primary);
+}
+
+body:has(.staff-layout) {
+  display: block;
+  padding: 0;
+  background: #f5f8f7;
 }
 
 button,
@@ -405,7 +412,7 @@ input:focus-visible {
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
   gap: 11px;
   padding: 14px 16px;
   border-top: 1px solid rgba(70, 92, 86, 0.12);
@@ -422,6 +429,43 @@ input:focus-visible {
   color: var(--text-primary);
   background: #ffffff;
 }
+
+.composer .payment-attach-button {
+  min-width: 0;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef7f3;
+  cursor: pointer;
+  font-size: 1.3rem;
+  color: #0b735b;
+  border: 1px solid #d3e9e0;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.composer .payment-attach-button:hover { background: #dff3e8; }
+.composer .payment-attach-button:focus-visible { outline: 3px solid #74c8a9; outline-offset: 2px; }
+
+.payment-attachment-preview {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #d9e9e0;
+  border-radius: 12px;
+  background: #f5faf7;
+}
+.payment-attachment-preview img { width: 58px; height: 58px; object-fit: cover; border: 1px solid #d8e5de; border-radius: 8px; }
+.payment-attachment-info { display: grid; flex: 1; gap: 4px; min-width: 0; }
+.payment-attachment-info strong { overflow: hidden; color: #173c31; font-size: .79rem; text-overflow: ellipsis; white-space: nowrap; }
+.payment-attachment-info small { color: #668177; font-size: .69rem; }
+.payment-attachment-preview select { max-width: 140px; padding: 7px; border: 1px solid var(--border-soft); border-radius: 8px; background: white; }
+.composer .payment-attachment-preview button { min-width: 0; height: 36px; padding: 0 12px; background: #e6eeeb; color: #204038; }
+.composer .payment-attachment-preview button:hover { background: #dae8e1; }
 
 .composer input:focus {
   border-color: var(--send-green);
@@ -465,6 +509,10 @@ input:focus-visible {
   color: var(--error);
   font-size: 0.76rem;
 }
+.payment-progress { grid-column: 1 / -1; display: grid; gap: 7px; margin: 0 12px; color: var(--brand-green); font-size: 0.8rem; }
+.payment-progress-track { width: 100%; height: 4px; overflow: hidden; border-radius: 4px; background: #d9eee4; }
+.payment-progress-track > span { display: block; width: 35%; height: 100%; border-radius: inherit; background: #159873; animation: payment-upload 1.4s ease-in-out infinite alternate; }
+@keyframes payment-upload { from { transform: translateX(0); } to { transform: translateX(185%); } }
 
 .visually-hidden {
   position: absolute;
@@ -573,6 +621,7 @@ input:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .payment-progress-track > span { animation: none; width: 100%; }
   .conversation {
     scroll-behavior: auto;
   }

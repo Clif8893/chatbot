@@ -164,8 +164,7 @@ class Config:
     WHATSAPP_TEMPLATE_LANGUAGE = os.getenv("WHATSAPP_TEMPLATE_LANGUAGE", "en")
 
     PAYMENT_AUTO_CONFIRM = False
-    PAYMENT_VISION_MODEL = os.getenv("PAYMENT_VISION_MODEL", "").strip()
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    PAYMENT_VISION_MODEL = os.getenv("PAYMENT_VISION_MODEL", "gpt-4o-mini").strip()
     PAYMENT_CONFIDENCE_THRESHOLD = float(
         os.getenv("PAYMENT_CONFIDENCE_THRESHOLD", "0.98")
     )

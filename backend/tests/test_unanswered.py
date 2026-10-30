@@ -64,7 +64,7 @@ def test_unclear_question_is_answered_not_greeted(client, conversation_id, fake_
 def test_small_talk_still_gets_the_greeting(client, conversation_id):
     text(client, conversation_id, "What is the venue?")
     reply = text(client, conversation_id, "ok thanks")
-    assert "Would you like to learn more about the course" in reply
+    assert "happy to help" in reply
 
 
 def test_venue_answer_is_only_given_for_venue_questions(client, conversation_id, fake_ai, monkeypatch):

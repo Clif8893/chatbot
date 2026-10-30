@@ -8,7 +8,10 @@ from backend.services.privacy import redact_for_classification
 FIELD_LABEL_PATTERNS = {
     "full_name": r"full\s+name(?:\s+as\s+shown\s+on\s+(?:your\s+)?nric(?:/fin)?)?|name",
     "nric": r"nric(?:/fin)?|fin(?:\s+number)?",
-    "date_of_birth": r"date\s+of\s+birth|d\.?o\.?b\.?,?|dob|born",
+    "date_of_birth": (
+        r"date\s+of\s+birth|birth\s*date|birthday|bday|"
+        r"d\.?o\.?b\.?,?|dob|born"
+    ),
     "email": r"e-?mail(?:\s+address)?",
     "preferred_intake_date": r"preferred\s+(?:course\s+)?(?:intake|date)|course\s+date|intake",
     "mobile_number": r"mobile(?:\s+number)?|handphone(?:\s+number)?|phone(?:\s+number)?|hp",
@@ -27,6 +30,22 @@ _MOBILE_PATTERN = re.compile(
     r"(?<!\d)(?:(?:\+?65)[\s-]?)?([89]\d{3}[\s-]?\d{4})(?!\d)"
 )
 _CORRECTION_PATTERN = re.compile(r"\b(?:change|correct|update|replace)\b", re.I)
+_QUESTION_VALUE_PATTERN = re.compile(
+    r"(?i)^(?:did\s+i|have\s+i|do\s+you|what\b|which\b|why\b|how\b|"
+    r"can\s+i|should\s+i|format\b|was\s+it|is\s+it)"
+)
+_DATE_VALUE_PREFIX = re.compile(
+    r"(?ix)^\s*(?:"
+    r"\d{1,2}(?:st|nd|rd|th)?(?:\s+of)?\s+"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    r"(?:,)?\s+\d{2,4}|"
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    r"\s+\d{1,2}(?:st|nd|rd|th)?(?:,)?\s+\d{2,4}|"
+    r"\d{1,4}[./-]\d{1,2}[./-]\d{1,4}|\d{8}"
+    r")"
+)
 
 
 def parse_enrollment_fields(message):
@@ -62,11 +81,20 @@ def parse_enrollment_fields(message):
 
     natural_name = re.search(
         r"(?i)^\s*i\s+am\s+([A-Za-z][A-Za-z '\-]*?)"
-        r"(?=\s*(?:[,;\n]|\band\s+(?:my\s+)?(?:email|e-?mail|mobile|phone|handphone|nric|dob|date\s+of\s+birth)\b))",
+        r"(?=\s*(?:[,;\n]|\band\s+(?:my\s+)?(?:email|e-?mail|mobile|phone|handphone|"
+        r"(?:contact\s+)?number|nric|dob|date\s+of\s+birth)\b|$))",
         text,
     )
     if natural_name:
         fields.setdefault("full_name", natural_name.group(1).strip())
+
+    called_name = re.search(
+        r"(?i)^\s*(?:you\s+can\s+)?call\s+me\s+"
+        r"([A-Za-z][A-Za-z '\-]{1,79}?)(?=\s*(?:[,;\n]|$))",
+        text,
+    )
+    if called_name:
+        fields.setdefault("full_name", called_name.group(1).strip())
 
     if "next available intake" in lowered or "awaiting confirmation" in lowered:
         fields["preferred_intake_date"] = "Awaiting confirmation"
@@ -93,7 +121,11 @@ def _labelled_fields(text):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         value = text[match.end() : end]
         value = re.sub(r"^[\s,;.]+|[\s,;.]+$", "", value)
-        if value:
+        if (
+            value
+            and value.strip("?! ")
+            and not _QUESTION_VALUE_PATTERN.match(value)
+        ):
             fields[field] = value
     return fields
 
@@ -104,11 +136,24 @@ def _normalise_text(message):
 
 def _clean_value(field, value):
     cleaned = " ".join(str(value).strip().split())
-    cleaned = re.sub(r"^(?:is\s+)", "", cleaned, flags=re.I)
-    if field in {"full_name", "date_of_birth", "preferred_intake_date"}:
+    cleaned = re.sub(r"^(?:(?:is|to)\s+)", "", cleaned, flags=re.I)
+    if field in {"full_name", "preferred_intake_date"}:
         cleaned = re.split(r"[,;]", cleaned, maxsplit=1)[0].strip()
+    if field == "date_of_birth":
+        # Preserve the comma inside "April 20th, 2000", but stop before an
+        # unlabelled email/phone or other value later in the same sentence.
+        date_prefix = _DATE_VALUE_PREFIX.match(cleaned)
+        if date_prefix:
+            cleaned = date_prefix.group(0).strip()
+        else:
+            cleaned = re.split(r"[,;]", cleaned, maxsplit=1)[0].strip()
     if field == "full_name":
         cleaned = re.sub(r"^\d+\s*[.)]\s*", "", cleaned)
+        cleaned = re.split(
+            r"(?i)\s+and\s+(?:my\s+)?(?:mobile|phone|handphone|contact)?\s*number\b",
+            cleaned,
+            maxsplit=1,
+        )[0].strip()
         cleaned = re.split(r"[.\n]", cleaned, maxsplit=1)[0].strip()
         cleaned = re.sub(
             r"(?i)\s+(?:and\s+)?(?:my\s*)?$", "", cleaned

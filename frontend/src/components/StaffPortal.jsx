@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import PaymentWorkspace from "./PaymentWorkspace.jsx";
 import {
   apiBaseUrl,
   documentUrl,
@@ -191,7 +192,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
     { id: "overview", label: "Overview", symbol: "◫" },
     { id: "enrollments", label: "Enrollments", symbol: "☷" },
     ...(financeAccess
-      ? [{ id: "accounts", label: "Accounts", symbol: "$" }]
+      ? [{ id: "payments", label: "Payments", symbol: "$" }, { id: "accounts", label: "Accounts", symbol: "$" }]
       : []),
     { id: "delivery", label: "Messages & delivery", symbol: "\u2197" },
     { id: "quality", label: "Quality review", symbol: "\u2713" },
@@ -209,6 +210,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
     overview: "Course administration",
     enrollments: "Enrollments",
     accounts: "Accounts & payment review",
+    payments: "Payment submissions",
     contacts: "Leads & escalations",
     schedule: "Course dates",
     content: "Course & FAQ content",
@@ -219,6 +221,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
     overview: "Keep every participant moving from first enquiry to receipt.",
     enrollments: "Review participant records and their current course status.",
     accounts: "Review evidence, issue receipts, and approve credit notes.",
+    payments: "Reconcile screenshots against your bank or claim records.",
     contacts:
       "Follow up with prospective participants and resolve staff cases.",
     schedule: "Publish available intakes and manage places on each course.",
@@ -229,7 +232,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
     const number = ++requestNumber.current;
     setLoading(true);
     setError("");
-    const paths = ["overview", "enrollments", "accounts"].includes(tab)
+    const paths = ["overview", "enrollments", "accounts", "payments"].includes(tab)
       ? [
           "dashboard",
           "enrollments",
@@ -379,7 +382,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
         <div aria-busy={loading || working}>
           {tab === "overview" && (
             <>
-              <Metrics dashboard={data.dashboard} />
+              <Metrics dashboard={data.dashboard} reviews={data.reviews} enrollments={data.enrollments} financeAccess={financeAccess} />
               <div className="overview-panels">
                 <section className="workspace-card">
                   <h2>Enrollment progress</h2>
@@ -399,22 +402,23 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
                 </section>
                 <section className="workspace-card">
                   <span className="eyebrow">Next actions</span>
-                  <h2>Keep accounts up to date</h2>
+                  <h2>{financeAccess ? "Keep accounts up to date" : "Keep participants moving"}</h2>
                   <ul className="action-summary">
-                    <li>
+                    {financeAccess && <li>
                       <span>Payment evidence awaiting review</span>
                       <strong>{data.dashboard.pending_reviews || 0}</strong>
-                    </li>
-                    <li>
+                    </li>}
+                    {financeAccess && <li>
                       <span>Paid enrollments awaiting a receipt</span>
                       <strong>{data.dashboard.pending_receipts || 0}</strong>
-                    </li>
-                    <li>
+                    </li>}
+                    {financeAccess && <li>
                       <span>Credit note requests</span>
                       <strong>
                         {data.dashboard.credit_note_requests || 0}
                       </strong>
-                    </li>
+                    </li>}
+                    {!financeAccess && <li><span>Open participant records</span><strong>{data.dashboard.total_enrollments || 0}</strong></li>}
                   </ul>
                   <button
                     className="secondary-button"
@@ -440,6 +444,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
               onOpen={openEnrollment}
             />
           )}
+          {tab === "payments" && <PaymentWorkspace reviews={data.reviews} enrollments={data.enrollments} action={action} working={working} />}
           {tab === "accounts" && (
             <>
               <Metrics dashboard={data.dashboard} accounts />
@@ -457,13 +462,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
                   Export payment report ↓
                 </a>
               </div>
-              <ReviewList
-                reviews={data.reviews}
-                enrollments={data.enrollments}
-                action={action}
-                working={working}
-                canApprove={financeAccess}
-              />
+              <div className="workspace-card payment-handoff"><div><span className="eyebrow">Payment evidence</span><h2>{data.dashboard.pending_reviews || 0} awaiting review</h2><p className="muted">Open the review workspace to compare screenshots with invoice records.</p></div><button type="button" className="primary-button" onClick={() => setTab("payments")}>Open payment reviews</button></div>
               <CreditNotes
                 enrollments={data.enrollments}
                 action={action}
@@ -525,32 +524,36 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
   );
 }
 
-function Metrics({ dashboard, accounts }) {
+function Metrics({ dashboard, accounts, reviews = [], enrollments = [], financeAccess = true }) {
+  const verifiedPayments = enrollments.reduce((total, enrollment) => total + (enrollment.payments || []).length, 0);
   const items = accounts
     ? [
-        ["Outstanding balance", money(dashboard.outstanding_total)],
-        ["Confirmed payments", money(dashboard.paid_total)],
-        ["Overdue accounts", dashboard.overdue || 0],
-        ["Pending receipts", dashboard.pending_receipts || 0],
+        ["Outstanding balance", money(dashboard.outstanding_total), "Across current invoices"],
+        ["Confirmed payments", money(dashboard.paid_total), "Recorded in the ledger"],
+        ["Overdue accounts", dashboard.overdue || 0, "Needs follow-up"],
+        ["Pending receipts", dashboard.pending_receipts || 0, "Paid records to complete"],
       ]
-    : [
-        ["Total enrollments", dashboard.total_enrollments || 0],
-        ["Confirmed payments", money(dashboard.paid_total)],
-        ["Awaiting review", dashboard.pending_reviews || 0],
-        ["Overdue accounts", dashboard.overdue || 0],
+    : financeAccess ? [
+        ["Pending reviews", dashboard.pending_reviews || 0, "Screenshots to reconcile"],
+        ["Verified payments", verifiedPayments, "Confirmed ledger entries"],
+        ["Needs clarification", reviews.filter((review) => review.status === "clarification_requested").length, "Customer follow-up needed"],
+        ["Outstanding balances", money(dashboard.outstanding_total), "Across current invoices"],
+      ] : [
+        ["Total enrollments", dashboard.total_enrollments || 0, "Current course records"],
+        ["Enrolled", dashboard.status_counts?.Enrolled || 0, "Participants registered"],
+        ["Enquiries", dashboard.status_counts?.Enquiry || 0, "Potential participants"],
+        ["Cancelled", dashboard.status_counts?.Cancelled || 0, "Closed registrations"],
       ];
   return (
     <div className="metric-grid">
-      {items.map(([label, value], index) => (
+      {items.map(([label, value, description], index) => (
         <section
           className={`metric-card ${index === 0 ? "metric-card--primary" : ""}`}
           key={label}
         >
           <span>{label}</span>
           <strong>{value}</strong>
-          <small>
-            {index === 1 ? "Across all enrollments" : "Current course records"}
-          </small>
+          <small>{description}</small>
         </section>
       ))}
     </div>
@@ -1175,8 +1178,8 @@ export function EnrollmentDetail({
   );
 }
 
-function ReviewList({ reviews, enrollments, action, working, canApprove }) {
-  const pending = reviews.filter((review) =>
+function ReviewList({ reviews, enrollments, action, working, canApprove, all = false }) {
+  const pending = reviews.filter((review) => all ||
     ["pending", "pending_review", "flagged", "needs_review", "open"].includes(
       normal(review.status),
     ),
@@ -1196,7 +1199,7 @@ function ReviewList({ reviews, enrollments, action, working, canApprove }) {
         />
       ))}
       {!pending.length && (
-        <Empty>No payment screenshots are awaiting staff review.</Empty>
+        <Empty>No payment screenshots found.</Empty>
       )}
     </div>
   );
@@ -1210,6 +1213,12 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
   const [transactionDate, setTransactionDate] = useState(
     extracted.transaction_date || "",
   );
+  const [payee, setPayee] = useState(extracted.recipient || "");
+  const [provider, setProvider] = useState(extracted.provider || "");
+  const [payer, setPayer] = useState(extracted.payer || "");
+  const [claimAmount, setClaimAmount] = useState(extracted.skillsfuture_claim_amount || "");
+  const [claimStatus, setClaimStatus] = useState(extracted.skillsfuture_claim_status || "");
+  const detectedMoney = (value) => value != null && value !== "" && Number.isFinite(Number(value)) ? money(value) : "Unreadable";
   return (
     <article className="workspace-card review-card">
       <div className="section-heading">
@@ -1220,28 +1229,29 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
         {enrollment?.invoice?.number || `Enrollment ${review.enrollment_id}`} ·{" "}
         {date(review.created_at)}
       </p>
+      <p className="muted small-copy">{enrollment?.course || "Course pending"} · {enrollment?.intake_display || "Intake pending"}</p>
+      <p>Invoice: {money(review.invoice?.course_fee || 0)} · Verified: {money(enrollment?.paid_amount || 0)} · Remaining: {money(review.outstanding_amount || 0)}</p>
+      <p>SkillsFuture invoice allocation: {money(review.invoice?.skillsfuture_amount || 0)} · Claim shown: {extracted.skillsfuture_claim_amount ? detectedMoney(extracted.skillsfuture_claim_amount) : "None"} ({extracted.skillsfuture_claim_status || "No status shown"})</p>
+      <p className="muted small-copy">{extracted.provider || "Provider unknown"} · {extracted.screenshot_type || "Screenshot type unknown"} · Payer: {extracted.payer || "Not shown"} · {extracted.transaction_time || "Time not shown"}</p>
+      {review.decided_at && <p className="muted small-copy">Reviewed {date(review.decided_at)} by {review.decided_by}: {review.note}</p>}
       <p className="review-reasons">
         {Array.isArray(review.reasons)
-          ? review.reasons.join(" · ")
-          : review.reasons || "Staff confirmation is required."}
+          ? review.reasons.map(readable).join(" · ")
+          : readable(review.reasons || "Staff confirmation is required.")}
       </p>
       <dl className="detail-list">
         <div>
-          <dt>Expected payment</dt>
+          <dt>Remaining invoice balance</dt>
           <dd>
             {enrollment?.invoice
-              ? money(
-                  review.evidence?.payment_type === "skillsfuture"
-                    ? enrollment.invoice.skillsfuture_amount
-                    : enrollment.invoice.net_payable,
-                )
+              ? money(review.outstanding_amount)
               : "—"}
           </dd>
         </div>
         <div>
           <dt>Detected amount</dt>
           <dd>
-            {extracted.amount != null ? money(extracted.amount) : "Unreadable"}
+            {detectedMoney(extracted.amount)}
           </dd>
         </div>
         <div>
@@ -1270,7 +1280,7 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
       >
         Open original screenshot ↗
       </a>
-      {canApprove && (
+      {canApprove && ["pending", "pending_review"].includes(review.status) && (
         <form
           className="stack-form panel-section"
           onSubmit={(event) => {
@@ -1285,6 +1295,7 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
                 ...(transactionDate
                   ? { transaction_date: transactionDate }
                   : {}),
+                corrections: { recipient: payee, provider, payer, skillsfuture_claim_amount: claimAmount, skillsfuture_claim_status: claimStatus },
               },
               "Payment review decision saved.",
             );
@@ -1318,6 +1329,11 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
               placeholder="Enter a reference if it was unreadable"
             />
           </label>
+          <label>Payee shown<input value={payee} onChange={(event) => setPayee(event.target.value)} /></label>
+          <label>Bank or provider shown<input value={provider} onChange={(event) => setProvider(event.target.value)} /></label>
+          <label>Payer shown<input value={payer} onChange={(event) => setPayer(event.target.value)} /></label>
+          <label>SkillsFuture claim shown (SGD)<input type="number" min="0" step="0.01" value={claimAmount} onChange={(event) => setClaimAmount(event.target.value)} /></label>
+          <label>SkillsFuture claim status shown<input value={claimStatus} onChange={(event) => setClaimStatus(event.target.value)} /></label>
           <label>
             Review note
             <textarea
@@ -1345,6 +1361,7 @@ function PaymentReview({ review, enrollment, action, working, canApprove }) {
             >
               Reject evidence
             </button>
+            <button className="secondary-button" type="submit" value="clarify" disabled={working}>Request clarification</button>
           </div>
         </form>
       )}

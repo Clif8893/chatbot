@@ -50,6 +50,9 @@ def business_app(tmp_path, fake_ai, name="business.db"):
         ("20/09/1925", False),
         ("15 May 2000", True),
         ("2000-05-15", True),
+        ("02092007", True),
+        ("020927", True),
+        ("32092007", False),
     ],
 )
 def test_dob_age_boundaries_use_frozen_singapore_date(value, accepted):
@@ -63,6 +66,19 @@ def test_dob_age_boundaries_use_frozen_singapore_date(value, accepted):
     )
     assert (error is None) is accepted
     assert (normalized is not None) is accepted
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("02092007", date(2007, 9, 2)), ("020927", date(1927, 9, 2))],
+)
+def test_compact_dob_uses_valid_age_range_for_century(value, expected):
+    normalized, error = validate_field(
+        "date_of_birth", value, CourseCatalogue(), as_of_date=TODAY,
+        minimum_age=16, maximum_age=100,
+    )
+    assert error is None
+    assert normalized == expected
 
 
 def test_invalid_dob_is_not_saved_or_allowed_to_progress(tmp_path, fake_ai):
@@ -318,5 +334,5 @@ def test_duplicate_active_enrollment_is_sent_for_staff_review(tmp_path, fake_ai)
     second_id = client.post("/api/conversations").get_json()["conversation_id"]
     response = _ready_for_confirmation(client, second_id)
     assert response["enrollment"]["status"] == "duplicate_review"
-    assert "active enrolment already exists" in response["message"]["content"]
+    assert "active enrolment with the same NRIC/FIN, mobile number" in response["message"]["content"]
     assert "test.student@example.com" not in response["message"]["content"]

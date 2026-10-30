@@ -1,13 +1,11 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import ChatbotPage from "./components/ChatbotPage.jsx";
 import ParticipantPanel from "./components/enrollment/ParticipantPanel.jsx";
 import StaffPortal from "./components/StaffPortal.jsx";
 import {
+  createGuestSession,
   getAuthSession,
-  loginParticipant,
-  logoutParticipant,
-  registerParticipant,
   setCsrfToken,
 } from "./services/chatApi.js";
 import "./workspace.css";
@@ -44,29 +42,22 @@ function ParticipantPortal() {
     );
   }, [showEnrollment]);
 
-  async function logout() {
-    await logoutParticipant();
-    setCsrfToken("");
-    setAuth(null);
-    setShowEnrollment(false);
-  }
-
   if (checking) {
-    return <div className="portal-root"><main className="login-page"><p>Loading your account…</p></main></div>;
+    return <div className="portal-root"><main className="guest-entry-page"><p>Opening the assistant…</p></main></div>;
   }
   if (!auth) {
-    return <div className="portal-root"><ParticipantAuth onAuthenticated={(result) => {
+    return <div className="portal-root"><ParticipantNameEntry onReady={(result) => {
       setCsrfToken(result.csrf_token);
       setAuth(result);
     }} /></div>;
   }
 
   return <div className="portal-root">
-    <nav className="public-navigation" aria-label="Participant portal">
+    <nav className="public-navigation" aria-label="Participant chat">
       <strong>Q&amp;M Academy</strong>
       <span>
         <button type="button" className="text-button" onClick={() => setShowEnrollment((value) => !value)}>{showEnrollment ? "Return to chat" : "Enrollment & invoice"}</button>
-        {" · "}{auth.user.full_name}{" · "}<button type="button" className="text-button" onClick={logout}>Sign out</button>
+        {" · "}Hi, {auth.user.full_name}
       </span>
     </nav>
     <div className={`participant-workspace${showEnrollment ? " participant-workspace--expanded" : ""}`}>
@@ -83,11 +74,8 @@ function ParticipantPortal() {
   </div>;
 }
 
-function ParticipantAuth({ onAuthenticated }) {
-  const [mode, setMode] = useState("login");
+function ParticipantNameEntry({ onReady }) {
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -96,10 +84,8 @@ function ParticipantAuth({ onAuthenticated }) {
     setBusy(true);
     setError("");
     try {
-      const result = mode === "register"
-        ? await registerParticipant(fullName, email, password)
-        : await loginParticipant(email, password);
-      onAuthenticated(result);
+      const result = await createGuestSession(fullName);
+      onReady(result);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -107,27 +93,23 @@ function ParticipantAuth({ onAuthenticated }) {
     }
   }
 
-  return <main className="login-page">
-    <div className="login-intro">
+  return <main className="guest-entry-page">
+    <div className="guest-entry-intro">
       <a href="/" className="brand-link">Q&amp;M Academy</a>
-      <span className="eyebrow">Participant portal</span>
-      <h1>Course support, all in one place.</h1>
-      <p>Ask course questions, continue your enrollment and return to your saved conversation.</p>
-      <a className="back-link" href="/staff">Staff sign in →</a>
+      <span className="eyebrow">Training assistant</span>
+      <h1>Chat with us about your course.</h1>
+      <p>No account or password is needed. Enter your name and start chatting, just like a messaging conversation.</p>
+      <a className="back-link" href="/staff">Staff workspace →</a>
     </div>
-    <section className="login-card" aria-labelledby="participant-auth-title">
-      <span className="eyebrow">{mode === "register" ? "Create account" : "Welcome back"}</span>
-      <h2 id="participant-auth-title">{mode === "register" ? "Register for the portal" : "Sign in to continue"}</h2>
+    <section className="guest-entry-card" aria-labelledby="guest-entry-title">
+      <span className="eyebrow">Welcome</span>
+      <h2 id="guest-entry-title">What should we call you?</h2>
+      <p className="muted">Your name identifies this chat session. No email or password is required.</p>
       <form className="stack-form" onSubmit={submit}>
-        {mode === "register" && <label>Full name<input autoComplete="name" value={fullName} onChange={(event) => setFullName(event.target.value)} required /></label>}
-        <label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-        <label>Password<input type="password" autoComplete={mode === "register" ? "new-password" : "current-password"} minLength="8" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+        <label>Your name<input autoFocus autoComplete="name" maxLength="80" placeholder="e.g. Dhiraj" value={fullName} onChange={(event) => setFullName(event.target.value)} required /></label>
         {error && <p className="notice-error" role="alert">{error}</p>}
-        <button className="primary-button" disabled={busy} type="submit">{busy ? "Please wait…" : mode === "register" ? "Create account" : "Sign in"}</button>
+        <button className="primary-button" disabled={busy} type="submit">{busy ? "Starting chat…" : "Start chat"}</button>
       </form>
-      <button className="text-button auth-mode-button" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>
-        {mode === "login" ? "New participant? Create an account" : "Already registered? Sign in"}
-      </button>
     </section>
   </main>;
 }

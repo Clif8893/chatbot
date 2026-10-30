@@ -204,7 +204,7 @@ def create_finance_blueprint(
     @action
     def decide_review(review_id):
         data = payload()
-        review = finance.decide_payment_review(review_id, data.get("decision"), actor(), data.get("note"), reference=data.get("reference"), amount=data.get("amount"), transaction_date=data.get("transaction_date"))
+        review = finance.decide_payment_review(review_id, data.get("decision"), actor(), data.get("note"), reference=data.get("reference"), amount=data.get("amount"), transaction_date=data.get("transaction_date"), corrections=data.get("corrections"))
         return jsonify(review=finance.serialize_review(review), enrollment=finance.serialize_enrollment(draft(review.enrollment_id)))
 
     @blueprint.post("/api/staff/enrollments/<enrollment_id>/skillsfuture/confirm")
@@ -280,6 +280,12 @@ def create_finance_blueprint(
     @action
     def report():
         return Response(finance.payment_report_csv(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=payment-status.csv", "Cache-Control": "no-store"})
+
+    @blueprint.get("/api/staff/reports/payments.xlsx")
+    @accountant
+    @action
+    def report_xlsx():
+        return Response(finance.payment_report_xlsx(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=payment-submissions.xlsx", "Cache-Control": "no-store"})
 
     @blueprint.post("/api/staff/reports/payments/send")
     @accountant

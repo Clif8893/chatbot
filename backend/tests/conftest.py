@@ -63,6 +63,9 @@ class FakeAIService:
             "capacity",
             "experience",
             "time",
+            "timing",
+            "training hours",
+            "schedule",
             "date",
             "skillsfuture",
             "skillfuture",
@@ -119,8 +122,50 @@ class FakeAIService:
                 "ready to enroll",
             )
         )
+        enrollment_interest = any(
+            phrase in lowered
+            for phrase in (
+                "works for me",
+                "suits me",
+                "prefer that date",
+                "prefer this date",
+                "that date is good",
+                "this date is good",
+                "reserve a place",
+                "hold a place",
+                "seriously interested",
+                "interested in joining",
+                "interested in the",
+            )
+        )
         starts_enrollment = any(term in lowered for term in enrollment_terms)
-        if direct_enrollment or (starts_enrollment and not asks_how_to_enroll):
+        if any(term in lowered for term in ("continue my enrollment", "continue my enrolment", "resume my enrollment", "resume my enrolment", "can we continue", "okay, continue", "ok, continue", "let's continue", "lets continue", "i'm ready", "im ready", "continue from where we stopped", "continue where we stopped")):
+            intent = "resume_workflow"
+        elif any(term in lowered for term in ("continue later", "ask something else first", "pause my enrollment", "pause my enrolment", "not ready to choose", "not sure which intake")):
+            intent = "pause_workflow"
+        elif any(term in lowered for term in ("what information do you need", "what information do you still need", "what information have i not provided", "what information have i already provided", "what info do you need", "what do you need from me", "what other details", "anything else", "what's missing", "what s missing", "so now need what", "what details are missing", "what is left", "what else you need", "what do i need to correct", "which fields have i completed", "what details i give already", "show my enrollment progress", "show my enrolment progress", "have i completed registration", "what happens next")):
+            intent = "workflow_question"
+        elif any(term in lowered for term in ("suitable for beginners", "better for beginners", "which course should i", "which course is right")):
+            intent = "course_comparison"
+        elif any(term in lowered for term in ("tell me a joke", "weather", "football score", "capital of")):
+            intent = "unsupported_general_question"
+        elif ("thanks" in lowered and not lowered.strip().startswith("no thanks")) or lowered.strip(" .!?") in {
+            "hi", "hello", "hey", "thanks", "thank you", "how are you",
+            "how's it going", "good morning", "gud morning", "good afternoon",
+            "gud afternoon", "good evening", "gud evening", "morning",
+            "afternoon", "evening",
+        }:
+            intent = "small_talk"
+        elif any(term in lowered for term in (
+            "cancel", "reschedul", "change my", "change me", "change enrollment",
+            "change enrolment", "update my", "discard draft", "withdraw",
+            "remove me from", "changed my mind", "move to", "put me in",
+            "add the other course", "add another course",
+        )):
+            intent = "enrollment"
+        elif enrollment_interest:
+            intent = "enrollment_interest"
+        elif direct_enrollment or (starts_enrollment and not asks_how_to_enroll):
             intent = "enrollment"
         elif asks_how_to_enroll or (
             any(term in lowered for term in faq_terms)

@@ -99,6 +99,7 @@ class PaymentEvidence(db.Model):
     __tablename__ = "payment_evidence"
     id = db.Column(db.String(36), primary_key=True, default=new_id)
     enrollment_id = db.Column(db.String(36), db.ForeignKey("enrollment_drafts.id"), nullable=False, index=True)
+    invoice_id = db.Column(db.String(36), db.ForeignKey("invoices.id"), index=True)
     sha256 = db.Column(db.String(64), nullable=False, index=True)
     channel = db.Column(db.String(24), nullable=False)
     source_event_id = db.Column(db.String(255), unique=True)
@@ -106,7 +107,7 @@ class PaymentEvidence(db.Model):
     storage_key = db.Column(db.String(255), nullable=False)
     extracted_json = db.Column(EncryptedText(), nullable=False, default="{}")
     payment_type = db.Column(db.String(24), nullable=False, default="paynow")
-    verdict = db.Column(db.String(32), nullable=False, default="review")
+    verdict = db.Column(db.String(32), nullable=False, default="pending_review")
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
 
 
@@ -122,7 +123,7 @@ class Payment(db.Model):
     transaction_date = db.Column(db.Date, nullable=False)
     confirmed_by = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)
-    __table_args__ = (db.UniqueConstraint("invoice_id", "method", name="uq_invoice_payment_method"),)
+    __table_args__ = (db.UniqueConstraint("evidence_id", name="uq_payment_evidence_once"),)
 
 
 class PaymentReview(db.Model):
@@ -131,7 +132,8 @@ class PaymentReview(db.Model):
     enrollment_id = db.Column(db.String(36), db.ForeignKey("enrollment_drafts.id"), nullable=False, index=True)
     evidence_id = db.Column(db.String(36), db.ForeignKey("payment_evidence.id"), nullable=False, unique=True)
     reasons_json = db.Column(db.Text, nullable=False)
-    status = db.Column(db.String(24), nullable=False, default="pending", index=True)
+    corrections_json = db.Column(EncryptedText(), nullable=False, default="{}")
+    status = db.Column(db.String(24), nullable=False, default="pending_review", index=True)
     note = db.Column(db.Text)
     decided_by = db.Column(db.String(255))
     decided_at = db.Column(db.DateTime(timezone=True))

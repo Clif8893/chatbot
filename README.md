@@ -178,10 +178,10 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The frontend uses only:
+Open `http://127.0.0.1:5173`. In local development, Vite forwards `/api` to the Flask server on port 5000, so the browser uses one origin. For a separate deployed API, set:
 
 ```dotenv
-VITE_API_BASE_URL=http://127.0.0.1:5000
+VITE_API_BASE_URL=https://your-api-host.example
 ```
 
 Participants register or sign in at `/`. Staff use `/staff`.

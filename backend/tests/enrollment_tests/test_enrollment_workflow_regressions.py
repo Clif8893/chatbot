@@ -13,17 +13,17 @@ from backend.services.course_catalogue import CATALOGUE_PATH, CourseCatalogue
 from backend.tests.conftest import FakeAIService, authenticated_client, send
 
 
-def test_greeting_only_is_deterministic_and_does_not_start_enrollment(
+def test_greeting_is_semantic_small_talk_and_does_not_start_enrollment(
     client, conversation_id, fake_ai
 ):
     before = len(fake_ai.classify_calls)
 
     payload = send(client, conversation_id, "Good morning!").get_json()
 
-    assert payload["routing"]["intent"] == "unclear"
+    assert payload["routing"]["intent"] == "small_talk"
     assert payload["enrollment"]["status"] is None
     assert payload["message"]["content"].startswith("Good morning!")
-    assert len(fake_ai.classify_calls) == before
+    assert len(fake_ai.classify_calls) == before + 1
 
 
 @pytest.mark.parametrize(
@@ -36,14 +36,14 @@ def test_greeting_only_is_deterministic_and_does_not_start_enrollment(
         ("gud morning", "Good morning!"),
     ],
 )
-def test_common_greeting_variants_are_deterministic(
+def test_common_greeting_variants_use_semantic_small_talk(
     client, conversation_id, fake_ai, message, opening
 ):
     before = len(fake_ai.classify_calls)
     payload = send(client, conversation_id, message).get_json()
     assert payload["message"]["content"].startswith(opening)
     assert payload["enrollment"]["status"] is None
-    assert len(fake_ai.classify_calls) == before
+    assert len(fake_ai.classify_calls) == before + 1
 
 
 def test_greeting_during_enrollment_preserves_draft_and_resumes_next_step(
@@ -60,8 +60,9 @@ def test_greeting_during_enrollment_preserves_draft_and_resumes_next_step(
 
     assert reply.startswith("Good morning, Test!")
     assert "valid nric/fin" not in reply.casefold()
-    assert "nric/fin" in reply.casefold()
-    assert len(fake_ai.classify_calls) == before
+    assert "8-digit singapore mobile number" in reply.casefold()
+    assert "nric/fin" not in reply.casefold()
+    assert len(fake_ai.classify_calls) == before + 1
     with app.app_context():
         assert EnrollmentDraft.query.one().full_name == "Test Student"
 

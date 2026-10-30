@@ -165,12 +165,14 @@ def register_participant_auth(app):
         )
         if user is None or not user.is_active:
             return {"authenticated": False, "user": None, "csrf_token": None}
+        is_guest = user.email.endswith("@guest.qm.local")
         return {
             "authenticated": True,
             "user": {
                 "id": user.id,
-                "email": user.email,
+                "email": None if is_guest else user.email,
                 "full_name": user.full_name,
+                "guest": is_guest,
             },
             "csrf_token": session.get("participant_csrf_token"),
         }
@@ -198,6 +200,48 @@ def register_participant_auth(app):
         if not isinstance(password, str) or not 8 <= len(password) <= 128:
             return None, None, "Password must contain 8 to 128 characters."
         return email, password, None
+
+    @app.post("/api/auth/guest")
+    def participant_guest():
+        """Start an isolated participant session using only a display name."""
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or set(body) - {"full_name"}:
+            return (
+                jsonify(
+                    error={
+                        "code": "INVALID_GUEST",
+                        "message": "Please enter your name to start chatting.",
+                    }
+                ),
+                400,
+            )
+        full_name = " ".join(str(body.get("full_name", "")).split())
+        if (
+            len(full_name) < 2
+            or len(full_name) > 80
+            or not any(character.isalpha() for character in full_name)
+        ):
+            return (
+                jsonify(
+                    error={
+                        "code": "INVALID_GUEST",
+                        "message": "Please enter your name to start chatting.",
+                    }
+                ),
+                400,
+            )
+        guest_key = uuid4().hex
+        user = User(
+            email=f"guest-{guest_key}@guest.qm.local",
+            full_name=full_name,
+        )
+        # The generated credential is never shown or used for sign-in. Keeping a
+        # valid hash preserves the existing account table contract while the
+        # browser session remains the only way to access this guest's chats.
+        user.set_password(token_urlsafe(48))
+        db.session.add(user)
+        db.session.commit()
+        return jsonify(start_session(user)), 201
 
     @app.post("/api/auth/register")
     def participant_register():

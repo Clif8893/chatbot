@@ -395,6 +395,26 @@ def apply_additive_migrations():
                 )
             )
 
+        if "payments" in tables and db.engine.url.get_backend_name() == "sqlite":
+            constraints = {item.get("name") for item in inspector.get_unique_constraints("payments")}
+            if "uq_invoice_payment_method" in constraints:
+                connection.execute(text("CREATE TABLE payments_rebuilt (id VARCHAR(36) PRIMARY KEY, enrollment_id VARCHAR(36) NOT NULL REFERENCES enrollment_drafts(id), invoice_id VARCHAR(36) NOT NULL REFERENCES invoices(id), evidence_id VARCHAR(36) UNIQUE REFERENCES payment_evidence(id), amount NUMERIC(10,2) NOT NULL, method VARCHAR(24) NOT NULL, reference VARCHAR(255) NOT NULL UNIQUE, transaction_date DATE NOT NULL, confirmed_by VARCHAR(255) NOT NULL, created_at DATETIME NOT NULL)"))
+                connection.execute(text("INSERT INTO payments_rebuilt SELECT id, enrollment_id, invoice_id, evidence_id, amount, method, reference, transaction_date, confirmed_by, created_at FROM payments"))
+                connection.execute(text("DROP TABLE payments"))
+                connection.execute(text("ALTER TABLE payments_rebuilt RENAME TO payments"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_payments_enrollment_id ON payments (enrollment_id)"))
+
+        if "payment_evidence" in tables:
+            columns = {item["name"] for item in inspector.get_columns("payment_evidence")}
+            if "invoice_id" not in columns:
+                connection.execute(text("ALTER TABLE payment_evidence ADD COLUMN invoice_id VARCHAR(36)"))
+                connection.execute(text("UPDATE payment_evidence SET invoice_id = (SELECT invoices.id FROM invoices WHERE invoices.enrollment_id = payment_evidence.enrollment_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_payment_evidence_invoice_id ON payment_evidence (invoice_id)"))
+        if "payment_reviews" in tables:
+            columns = {item["name"] for item in inspector.get_columns("payment_reviews")}
+            if "corrections_json" not in columns:
+                connection.execute(text("ALTER TABLE payment_reviews ADD COLUMN corrections_json TEXT"))
+
 
 def backup_sqlite_before_schema_sync():
     """Create a consistent copy before create_all or additive ALTER statements."""
@@ -421,6 +441,12 @@ def backup_sqlite_before_schema_sync():
             if expected - actual:
                 schema_change_needed = True
                 break
+    if not schema_change_needed:
+        if "payments" in existing_tables and any(
+            item.get("name") == "uq_invoice_payment_method"
+            for item in inspector.get_unique_constraints("payments")
+        ):
+            schema_change_needed = True
     if not schema_change_needed:
         return None
 

@@ -224,8 +224,18 @@ class InvoiceTemplateService:
                 self._populate(workbook_path, enrollment, record.invoice_number)
                 self._verify_workbook(workbook_path, enrollment, record.invoice_number)
                 self.converter.convert(workbook_path, pdf_path, self.sheet_name)
+                _append_demo_payment_page(
+                    pdf_path,
+                    record.invoice_number,
+                    _money(enrollment.course_fee),
+                )
                 content = pdf_path.read_bytes() if pdf_path.is_file() else b""
-                self._validate_pdf(content, record.invoice_number, enrollment.full_name)
+                self._validate_pdf(
+                    content,
+                    record.invoice_number,
+                    enrollment.full_name,
+                    _money(enrollment.course_fee),
+                )
                 temp_destination.write_bytes(content)
                 os.replace(temp_destination, destination)
             record.storage_key = destination.relative_to(self.storage_root).as_posix()
@@ -506,7 +516,9 @@ class InvoiceTemplateService:
                     return content
         raise FileNotFoundError
 
-    def _validate_pdf(self, content, invoice_number, participant_name):
+    def _validate_pdf(
+        self, content, invoice_number, participant_name, amount_due
+    ):
         if not content.startswith(b"%PDF-") or len(content) < 100:
             raise ValueError("Converter did not produce a valid PDF")
         try:
@@ -515,17 +527,28 @@ class InvoiceTemplateService:
             except ImportError:
                 from PyPDF2 import PdfReader
             reader = PdfReader(BytesIO(content))
-            if len(reader.pages) != 1:
-                raise ValueError("Generated invoice PDF must contain exactly one page")
-            box = reader.pages[0].mediabox
-            width = float(box.width)
-            height = float(box.height)
-            if not (590 <= width <= 600 and 837 <= height <= 847):
-                raise ValueError("Generated invoice PDF must use A4 portrait paper")
+            if len(reader.pages) != 2:
+                raise ValueError("Generated invoice PDF must contain exactly two pages")
+            for page in reader.pages:
+                box = page.mediabox
+                width = float(box.width)
+                height = float(box.height)
+                if not (590 <= width <= 600 and 837 <= height <= 847):
+                    raise ValueError("Generated invoice PDF must use A4 portrait paper")
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
         except Exception as error:
             raise ValueError("Generated PDF could not be opened") from error
-        if invoice_number not in text or participant_name not in text or "#######" in text:
+        payment_markers = (
+            "TEST PAYMENT QR",
+            "NOT A REAL PAYMENT CODE",
+            f"S${amount_due:,.2f}",
+        )
+        if (
+            invoice_number not in text
+            or participant_name not in text
+            or any(marker not in text for marker in payment_markers)
+            or "#######" in text
+        ):
             raise ValueError("Generated PDF content could not be verified")
 
     def _valid_existing(self, record, path):
@@ -535,6 +558,7 @@ class InvoiceTemplateService:
                 bool(record.sha256)
                 and hashlib.sha256(content).hexdigest() == record.sha256
                 and content.startswith(b"%PDF-")
+                and _has_demo_payment_page(content)
             )
         except OSError:
             return False
@@ -678,6 +702,157 @@ def _trim_logo(path):
         source.save(output, format="PNG", optimize=True)
         output.seek(0)
         return output
+
+
+def _append_demo_payment_page(pdf_path, invoice_number, amount_due):
+    """Append a visibly test-only payment page with a non-functional QR graphic."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except ImportError:  # pragma: no cover - legacy dependency fallback
+        from PyPDF2 import PdfReader, PdfWriter
+    from reportlab.lib.colors import HexColor, black, white
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    payment_page = BytesIO()
+    width, height = A4
+    pdf = canvas.Canvas(payment_page, pagesize=A4)
+    green = HexColor("#007A64")
+    grey = HexColor("#5B6B68")
+    pale = HexColor("#EAF5F1")
+
+    pdf.setFillColor(green)
+    pdf.rect(0, height - 92, width, 92, stroke=0, fill=1)
+    pdf.setFillColor(white)
+    pdf.setFont("Helvetica-Bold", 22)
+    pdf.drawCentredString(width / 2, height - 56, "TEST PAYMENT QR")
+    pdf.setFont("Helvetica", 10)
+    pdf.drawCentredString(width / 2, height - 75, "Invoice payment simulation - page 2 of 2")
+
+    pdf.setFillColor(black)
+    pdf.setFont("Helvetica-Bold", 15)
+    pdf.drawCentredString(width / 2, height - 145, "Scan this test QR to simulate payment")
+    pdf.setFont("Helvetica", 11)
+    pdf.setFillColor(grey)
+    pdf.drawCentredString(width / 2, height - 167, "Pay the exact amount shown below for this course invoice.")
+
+    qr_size = 132
+    qr_x = (width - qr_size) / 2
+    qr_y = height - 340
+    _draw_fake_qr(
+        pdf,
+        qr_x,
+        qr_y,
+        qr_size,
+        f"{invoice_number}|{amount_due:.2f}",
+    )
+
+    pdf.setFillColor(pale)
+    pdf.roundRect(92, height - 455, width - 184, 72, 10, stroke=0, fill=1)
+    pdf.setFillColor(grey)
+    pdf.setFont("Helvetica", 10)
+    pdf.drawCentredString(width / 2, height - 410, "AMOUNT TO PAY")
+    pdf.setFillColor(green)
+    pdf.setFont("Helvetica-Bold", 24)
+    pdf.drawCentredString(width / 2, height - 440, f"S${amount_due:,.2f}")
+
+    pdf.setFillColor(black)
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawCentredString(width / 2, height - 500, "NOT A REAL PAYMENT CODE")
+    pdf.setFont("Helvetica", 9)
+    pdf.setFillColor(grey)
+    pdf.drawCentredString(
+        width / 2,
+        height - 520,
+        "This QR graphic is intentionally non-functional and is provided for testing only.",
+    )
+    pdf.drawCentredString(width / 2, height - 548, f"Invoice reference: {invoice_number}")
+    pdf.save()
+    payment_page.seek(0)
+
+    reader = PdfReader(BytesIO(Path(pdf_path).read_bytes()))
+    demo_reader = PdfReader(payment_page)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.add_page(demo_reader.pages[0])
+    temporary = Path(pdf_path).with_suffix(".payment.tmp")
+    try:
+        with temporary.open("wb") as output:
+            writer.write(output)
+        os.replace(temporary, pdf_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _draw_fake_qr(pdf, x, y, size, payload):
+    """Draw a deterministic QR-like matrix that deliberately encodes no payment."""
+    modules = 25
+    cell = size / modules
+    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+
+    def finder_value(column, row, origin_x, origin_y):
+        local_x = column - origin_x
+        local_y = row - origin_y
+        if not (0 <= local_x < 7 and 0 <= local_y < 7):
+            return None
+        return (
+            local_x in {0, 6}
+            or local_y in {0, 6}
+            or (2 <= local_x <= 4 and 2 <= local_y <= 4)
+        )
+
+    pdf.setFillColorRGB(1, 1, 1)
+    pdf.rect(x - 5, y - 5, size + 10, size + 10, stroke=1, fill=1)
+    pdf.setFillColorRGB(0, 0, 0)
+    finders = ((0, modules - 7), (modules - 7, modules - 7), (0, 0))
+    for row in range(modules):
+        for column in range(modules):
+            finder = next(
+                (
+                    value
+                    for origin_x, origin_y in finders
+                    if (value := finder_value(column, row, origin_x, origin_y))
+                    is not None
+                ),
+                None,
+            )
+            if finder is None:
+                bit_index = (row * modules + column) % (len(digest) * 8)
+                byte = digest[bit_index // 8]
+                dark = bool(byte & (1 << (bit_index % 8)))
+                # Break QR timing/format structures on purpose so scanners cannot
+                # mistake this visual test fixture for a real payment payload.
+                dark = dark ^ ((row + column) % 7 == 0)
+            else:
+                dark = finder
+            if dark:
+                pdf.rect(
+                    x + column * cell,
+                    y + row * cell,
+                    cell + 0.15,
+                    cell + 0.15,
+                    stroke=0,
+                    fill=1,
+                )
+
+
+def _has_demo_payment_page(content):
+    try:
+        try:
+            from pypdf import PdfReader
+        except ImportError:  # pragma: no cover - legacy dependency fallback
+            from PyPDF2 import PdfReader
+        reader = PdfReader(BytesIO(content))
+        if len(reader.pages) != 2:
+            return False
+        text = reader.pages[1].extract_text() or ""
+        return (
+            "TEST PAYMENT QR" in text
+            and "NOT A REAL PAYMENT CODE" in text
+        )
+    except Exception:
+        return False
 
 
 def _normalise_pdf_to_a4(pdf_path):

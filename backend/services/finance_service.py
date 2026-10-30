@@ -13,11 +13,11 @@ from uuid import uuid4
 
 from flask import current_app
 from PIL import Image
-from sqlalchemy.exc import IntegrityError
 
 from backend.extensions import db
+from backend.agents.payment_agent import PaymentEvidenceFlow
 from backend.models import EnrollmentDraft, utc_now
-from backend.models.finance import (CreditNoteRequest, FinanceAudit, FinanceCase, FinancialDocument, Invoice, MasterInvoiceExport, Payment, PaymentEvidence, PaymentReview)
+from backend.models.finance import (CreditNoteRequest, FinanceAudit, FinanceCase, FinancialDocument, Invoice, InvoiceGeneration, MasterInvoiceExport, Payment, PaymentEvidence, PaymentReview)
 from backend.models.operations import CourseDate
 from backend.services.document_service import DocumentService
 from backend.services.payment_vision import PaymentExtraction, PaymentVision
@@ -130,6 +130,9 @@ class FinanceService:
         if selected_fee is None:
             raise ValueError("The approved course fee must be confirmed before invoicing")
         fee = money(selected_fee)
+        planned_claim = money(draft.skillsfuture_amount or 0)
+        if planned_claim > fee:
+            raise ValueError("SkillsFuture allocation cannot exceed the course fee")
         uen = selected_course.get("paynow", {}).get("uen")
         if not uen:
             raise ValueError("Approved PayNow recipient UEN is required")
@@ -141,13 +144,40 @@ class FinanceService:
         )
         invoice = Invoice(enrollment_id=draft.id, number=invoice_number,
                           course_name=draft.course, participant_name=draft.full_name, course_date=draft.preferred_intake_date,
-                          course_fee=fee, skillsfuture_amount=Decimal("0.00"), net_payable=fee, recipient_uen=uen,
+                          course_fee=fee, skillsfuture_amount=planned_claim, net_payable=fee - planned_claim, recipient_uen=uen,
                           due_date=date.today() + timedelta(days=int(current_app.config.get("PAYMENT_DUE_DAYS", 14))))
         db.session.add(invoice)
         db.session.flush()
         self.get_case(draft)
         document = self._save_document(invoice, "invoice")
         self._queue_document(draft, document)
+        return invoice
+
+    def _invoice_for_evidence(self, draft):
+        invoice = self._invoice(draft)
+        if invoice:
+            return invoice
+        template = db.session.execute(db.select(InvoiceGeneration).where(InvoiceGeneration.enrollment_id == draft.id)).scalar_one_or_none()
+        if not template or template.status != "generated" or not template.storage_key:
+            raise ValueError("A generated invoice is required before submitting payment evidence")
+        course = self.catalogue.course_for(draft.course_id or draft.course)
+        if not course or draft.status not in {"confirmed", "paid", "receipt_issued"}:
+            raise ValueError("A confirmed enrollment and course are required")
+        fee = money(draft.course_fee or self.catalogue.course_fee_for(course))
+        claim = money(draft.skillsfuture_amount or 0)
+        if claim > fee:
+            raise ValueError("SkillsFuture allocation cannot exceed the course fee")
+        uen = course.get("paynow", {}).get("uen") or "STAFF_CONFIRMATION_REQUIRED"
+        invoice = Invoice(enrollment_id=draft.id, number=template.invoice_number,
+            course_name=draft.course, participant_name=draft.full_name,
+            course_date=draft.preferred_intake_date, course_fee=fee,
+            skillsfuture_amount=claim, net_payable=fee - claim,
+            recipient_uen=uen,
+            due_date=date.today() + timedelta(days=int(current_app.config.get("PAYMENT_DUE_DAYS", 14))))
+        db.session.add(invoice)
+        db.session.flush()
+        self.get_case(draft)
+        self._audit(draft, "payment_invoice_linked", invoice_id=invoice.id, template_id=template.id)
         return invoice
 
     def _queue_document(self, draft, document):
@@ -265,7 +295,8 @@ class FinanceService:
         if not 0 <= extraction.confidence <= 1 or extraction.confidence < float(current_app.config.get("PAYMENT_CONFIDENCE_THRESHOLD", .98)):
             reasons.append("low_confidence")
         try:
-            if money(extraction.amount) != money(invoice.net_payable):
+            amount = money(extraction.amount)
+            if amount <= 0 or amount > money(invoice.course_fee):
                 reasons.append("amount_mismatch")
         except ValueError:
             reasons.append("amount_unreadable")
@@ -273,6 +304,8 @@ class FinanceService:
             reasons.append("currency_mismatch")
         recipient = normalize_reference(extraction.recipient)
         allowed = {normalize_reference(invoice.recipient_uen)}
+        if invoice.recipient_uen == "STAFF_CONFIRMATION_REQUIRED":
+            reasons.append("payee_not_configured")
         for alias in current_app.config.get("PAYNOW_RECIPIENT_ALIASES", []):
             allowed.add(normalize_reference(alias))
         if not recipient or recipient not in allowed:
@@ -282,7 +315,7 @@ class FinanceService:
             reasons.append("reference_missing")
         elif db.session.execute(db.select(Payment.id).where(Payment.reference == reference)).first():
             reasons.append("duplicate_transaction_reference")
-        if normalize_reference(extraction.invoice_number) != normalize_reference(invoice.number):
+        if extraction.invoice_number and normalize_reference(extraction.invoice_number) != normalize_reference(invoice.number):
             reasons.append("invoice_reference_missing_or_mismatch")
         try:
             transaction_date = date.fromisoformat(extraction.transaction_date or "")
@@ -292,8 +325,6 @@ class FinanceService:
             reasons.append("transaction_date_unreadable")
         if db.session.execute(db.select(PaymentEvidence.id).where(PaymentEvidence.sha256 == digest)).first():
             reasons.append("duplicate_screenshot")
-        if db.session.execute(db.select(Payment.id).where(Payment.invoice_id == invoice.id, Payment.method == "paynow")).first():
-            reasons.append("invoice_paynow_already_paid")
         if self.get_case(invoice.enrollment).status in {"Cancelled", "Credit Note Required"}:
             reasons.append("enrollment_cancelled_or_credit_requested")
         return reasons, facts
@@ -302,7 +333,7 @@ class FinanceService:
         if payment_type not in {"paynow", "skillsfuture"}:
             raise ValueError("Only PayNow and SkillsFuture evidence is supported")
         self._validate_image(image_bytes, mime_type)
-        invoice = self._invoice(draft) or self.create_invoice(draft)
+        invoice = self._invoice_for_evidence(draft)
         if source_event_id:
             prior = db.session.execute(db.select(PaymentEvidence).where(PaymentEvidence.source_event_id == source_event_id)).scalar_one_or_none()
             if prior:
@@ -310,9 +341,9 @@ class FinanceService:
                     raise ValueError("Payment event has already been used")
                 return self._payment_result(prior)
         digest = hashlib.sha256(image_bytes).hexdigest()
-        vision = self.vision or PaymentVision(current_app.config.get("ANTHROPIC_API_KEY", ""), current_app.config.get("PAYMENT_VISION_MODEL", ""))
+        vision = self.vision or PaymentVision(current_app.config.get("OPENAI_API_KEY", ""), current_app.config.get("PAYMENT_VISION_MODEL", "gpt-4o-mini"))
         try:
-            extraction = vision.extract(image_bytes, mime_type)
+            extraction = PaymentEvidenceFlow(vision, image_bytes, mime_type).kickoff()
             if isinstance(extraction, dict):
                 extraction = PaymentExtraction(**extraction)
             if not isinstance(extraction, PaymentExtraction):
@@ -320,47 +351,43 @@ class FinanceService:
         except Exception:
             extraction = PaymentExtraction(error="vision_extraction_failed")
         reasons, facts = self._checks(invoice, extraction, digest)
+        screenshot_type = (extraction.screenshot_type or "").lower()
+        if ("skillsfuture" in screenshot_type and payment_type != "skillsfuture") or ("paynow" in screenshot_type and payment_type != "paynow"):
+            reasons.append("screenshot_type_mismatch")
         if payment_type == "skillsfuture":
             reasons.append("skillsfuture_claim_requires_accounts_confirmation")
-        if not current_app.config.get("PAYMENT_AUTO_CONFIRM", False):
-            reasons.append("automatic_confirmation_not_enabled")
-        evidence = PaymentEvidence(enrollment_id=draft.id, sha256=digest, channel=channel, source_event_id=source_event_id,
+        reasons.append("staff_reconciliation_required")
+        evidence = PaymentEvidence(enrollment_id=draft.id, invoice_id=invoice.id, sha256=digest, channel=channel, source_event_id=source_event_id,
                                    mime_type=mime_type, storage_key=self.storage.save(image_bytes), extracted_json=json.dumps(facts), payment_type=payment_type)
         db.session.add(evidence)
         db.session.flush()
-        if not reasons:
-            try:
-                with db.session.begin_nested():
-                    self._confirm_payment(draft, evidence, invoice.net_payable, "paynow", extraction.reference, extraction.transaction_date, "vision_policy")
-            except IntegrityError:
-                reasons.append("duplicate_transaction_reference")
-        if reasons:
-            evidence.verdict = "review"
-            review = PaymentReview(enrollment_id=draft.id, evidence_id=evidence.id, reasons_json=json.dumps(list(dict.fromkeys(reasons))))
-            db.session.add(review)
-            db.session.flush()
-            self._audit(draft, "payment_review_requested", evidence_id=evidence.id, reasons=reasons)
-            staff_email = current_app.config.get("STAFF_ALERT_EMAIL")
-            if staff_email:
-                self.delivery.queue("email", staff_email, "Q&M payment needs review", f"Enrollment {draft.id} requires staff payment review. Reasons: {', '.join(reasons)}. Sign in to the staff portal to view protected evidence.", purpose="payment_review", conversation_id=draft.conversation_id)
-        else:
-            evidence.verdict = "confirmed"
+        evidence.verdict = "pending_review"
+        review = PaymentReview(enrollment_id=draft.id, evidence_id=evidence.id, reasons_json=json.dumps(list(dict.fromkeys(reasons))), corrections_json="{}", status="pending_review")
+        db.session.add(review)
+        db.session.flush()
+        self._audit(draft, "payment_review_requested", evidence_id=evidence.id, reasons=reasons)
+        staff_email = current_app.config.get("STAFF_ALERT_EMAIL")
+        if staff_email:
+            self.delivery.queue("email", staff_email, "Q&M payment needs review", f"Enrollment {draft.id} requires staff payment review. Sign in to the staff portal to view protected evidence.", purpose="payment_review", conversation_id=draft.conversation_id)
         return self._payment_result(evidence)
 
     def _confirm_payment(self, draft, evidence, amount, method, reference, transaction_date, actor):
-        invoice = self._invoice(draft)
+        invoice = db.session.execute(db.select(Invoice).where(Invoice.enrollment_id == draft.id).with_for_update()).scalar_one_or_none()
+        if invoice is None:
+            raise ValueError("Invoice not found")
         if self.get_case(draft).status in {"Cancelled", "Credit Note Required"}:
             raise ValueError("Cannot confirm payment on a cancelled enrollment or pending credit note")
-        expected = invoice.net_payable if method == "paynow" else invoice.skillsfuture_amount
-        if money(amount) != money(expected) or money(expected) <= 0:
-            raise ValueError("Confirmed amount must match the outstanding payment component")
+        amount = money(amount)
+        already_paid = sum((row.amount for row in db.session.execute(db.select(Payment).where(Payment.invoice_id == invoice.id)).scalars()), Decimal(0))
+        if amount <= 0 or amount > money(invoice.course_fee) - already_paid:
+            raise ValueError("Verified amount must be positive and no greater than the remaining invoice balance")
+        if evidence and db.session.execute(db.select(Payment.id).where(Payment.evidence_id == evidence.id)).first():
+            raise ValueError("This screenshot has already been counted")
         reference = normalize_reference(reference)
         if len(reference) < 4:
             raise ValueError("A verified unique bank or claim reference is required")
         if db.session.execute(db.select(Payment.id).where(Payment.reference == reference)).first():
             raise ValueError("Transaction reference has already been confirmed")
-        if db.session.execute(db.select(Payment.id).where(Payment.invoice_id == invoice.id, Payment.method == method)).first():
-            raise ValueError("This invoice payment component is already confirmed")
         try:
             paid_date = date.fromisoformat(transaction_date)
         except (TypeError, ValueError):
@@ -386,21 +413,46 @@ class FinanceService:
                 + f"\nTraining time: {(course or {}).get('training_time') or 'Staff confirmation required'}\nVenue: {(course or {}).get('venue', {}).get('customer_reply', 'Staff confirmation required')}\n"
                 + "Your receipt email is processed separately. Contact course administration if you need attendance assistance.",
                 conversation_id=draft.conversation_id, purpose="course_payment_confirmation")
-            if draft.mobile_number:
-                self.delivery.queue("whatsapp", draft.mobile_number, None, f"Payment confirmed: S${payment.amount:.2f}, {paid_date.isoformat()}, reference {reference}. Your receipt is queued for email delivery.", conversation_id=draft.conversation_id, purpose="payment_confirmation")
+        balance = money(invoice.course_fee) - total
+        body = (f"We verified your S${payment.amount:.2f} payment for invoice {invoice.number}. "
+                + (f"Remaining balance: S${balance:.2f}." if balance > 0 else "Your course fee is fully paid. Thank you."))
+        self._customer_payment_message(draft, body, f"payment_decision:{payment.id}")
         return payment
 
-    def decide_payment_review(self, review_id, decision, actor, note, reference=None, amount=None, transaction_date=None):
+    def _customer_payment_message(self, draft, body, key):
+        from backend.models.communications import OutboundMessage
+        from backend.services.conversation_repository import ConversationRepository
+        if db.session.execute(db.select(OutboundMessage.id).where(OutboundMessage.idempotency_key == key)).first():
+            return
+        conversation = ConversationRepository().get(draft.conversation_id)
+        if conversation:
+            ConversationRepository().add_message(conversation, "assistant", body, agent_name="payment", outcome_status="completed")
+        if draft.mobile_number:
+            self.delivery.queue("whatsapp", draft.mobile_number, None, body,
+                conversation_id=draft.conversation_id, enrollment_id=draft.id,
+                purpose="payment_decision", idempotency_key=key)
+
+    def decide_payment_review(self, review_id, decision, actor, note, reference=None, amount=None, transaction_date=None, corrections=None):
         review = db.session.get(PaymentReview, review_id)
         if not review:
             raise LookupError("Payment review not found")
-        if review.status != "pending":
+        if review.status not in {"pending", "pending_review"}:
             raise ValueError("Payment review has already been decided")
-        if decision not in {"approve", "reject"} or not str(note or "").strip():
-            raise ValueError("An approve/reject decision and review note are required")
+        if decision not in {"approve", "reject", "clarify"} or not str(note or "").strip():
+            raise ValueError("An approve/reject/clarify decision and review note are required")
         evidence = db.session.get(PaymentEvidence, review.evidence_id)
         draft = db.session.get(EnrollmentDraft, review.enrollment_id)
         facts = json.loads(evidence.extracted_json)
+        if corrections is not None:
+            if not isinstance(corrections, dict):
+                raise ValueError("Corrections must be an object")
+            allowed = {"provider", "screenshot_type", "payer", "recipient", "currency", "invoice_number", "skillsfuture_claim_amount", "skillsfuture_claim_status"}
+            if set(corrections) - allowed:
+                raise ValueError("Unsupported correction field")
+            cleaned = {key: str(value).strip()[:255] for key, value in corrections.items() if value is not None and str(value).strip()}
+            if "skillsfuture_claim_amount" in cleaned:
+                money(cleaned["skillsfuture_claim_amount"])
+            review.corrections_json = json.dumps(cleaned)
         if decision == "approve":
             reasons = json.loads(review.reasons_json)
             if "duplicate_screenshot" in reasons or "duplicate_transaction_reference" in reasons:
@@ -408,9 +460,13 @@ class FinanceService:
             self._confirm_payment(draft, evidence, amount if amount is not None else facts.get("amount"), evidence.payment_type,
                                   reference or facts.get("reference"), transaction_date or facts.get("transaction_date"), actor)
             evidence.verdict = "confirmed"
-        else:
+        elif decision == "reject":
             evidence.verdict = "rejected"
-        review.status = "approved" if decision == "approve" else "rejected"
+            self._customer_payment_message(draft, "We could not verify your payment screenshot. Please contact course administration or send a clearer screenshot.", f"payment_decision:{review.id}")
+        else:
+            evidence.verdict = "clarification_requested"
+            self._customer_payment_message(draft, "We need more information about your payment screenshot. Please send a clearer screenshot or contact course administration.", f"payment_decision:{review.id}")
+        review.status = {"approve": "approved", "reject": "rejected", "clarify": "clarification_requested"}[decision]
         review.note, review.decided_by, review.decided_at = str(note).strip(), actor, utc_now()
         self._audit(draft, "payment_review_decided", actor, review_id=review.id, decision=decision)
         return review
@@ -490,11 +546,14 @@ class FinanceService:
         return {"id": document.id, "kind": document.kind, "number": document.number, "version": document.version, "signed": document.signed, "delivery_id": document.delivery_id, "created_at": iso(document.created_at), "download_url": f"/api/staff/documents/{document.id}"}
 
     def serialize_evidence(self, evidence):
-        return {"id": evidence.id, "enrollment_id": evidence.enrollment_id, "channel": evidence.channel, "payment_type": evidence.payment_type, "mime_type": evidence.mime_type, "verdict": evidence.verdict, "created_at": iso(evidence.created_at), "download_url": f"/api/staff/evidence/{evidence.id}"}
+        return {"id": evidence.id, "enrollment_id": evidence.enrollment_id, "invoice_id": evidence.invoice_id, "channel": evidence.channel, "payment_type": evidence.payment_type, "mime_type": evidence.mime_type, "verdict": evidence.verdict, "created_at": iso(evidence.created_at), "download_url": f"/api/staff/evidence/{evidence.id}"}
 
     def serialize_review(self, review):
         evidence = db.session.get(PaymentEvidence, review.evidence_id)
-        return {"id": review.id, "enrollment_id": review.enrollment_id, "evidence_id": review.evidence_id, "reasons": json.loads(review.reasons_json), "status": review.status, "note": review.note, "decided_by": review.decided_by, "created_at": iso(review.created_at), "extracted": json.loads(evidence.extracted_json), "evidence": self.serialize_evidence(evidence)}
+        enrollment = self.serialize_enrollment(db.session.get(EnrollmentDraft, review.enrollment_id))
+        original = json.loads(evidence.extracted_json)
+        corrections = json.loads(review.corrections_json or "{}")
+        return {"id": review.id, "enrollment_id": review.enrollment_id, "evidence_id": review.evidence_id, "reasons": json.loads(review.reasons_json), "status": review.status, "note": review.note, "decided_by": review.decided_by, "decided_at": iso(review.decided_at), "created_at": iso(review.created_at), "extracted": {**original, **corrections}, "original_extracted": original, "corrections": corrections, "evidence": self.serialize_evidence(evidence), "invoice": enrollment["invoice"], "verified_payments": enrollment["payments"], "outstanding_amount": enrollment["outstanding_amount"]}
 
     def serialize_credit_note(self, record):
         return {"id": record.id, "enrollment_id": record.enrollment_id, "invoice_id": record.invoice_id, "status": record.status, "reason": record.reason, "note": record.note, "document_id": record.document_id, "requested_by": record.requested_by, "decided_by": record.decided_by, "created_at": iso(record.created_at)}
@@ -562,7 +621,7 @@ class FinanceService:
     def dashboard(self):
         rows = self.list_enrollments()
         return {"total_enrollments": len(rows), "status_counts": dict(Counter(row["status"] for row in rows)),
-                "pending_reviews": db.session.execute(db.select(db.func.count()).select_from(PaymentReview).where(PaymentReview.status == "pending")).scalar(),
+                "pending_reviews": db.session.execute(db.select(db.func.count()).select_from(PaymentReview).where(PaymentReview.status.in_(["pending", "pending_review"]))).scalar(),
                 "pending_receipts": sum(row["status"] == "Paid" for row in rows), "overdue": sum(row["overdue"] for row in rows),
                 "credit_note_requests": db.session.execute(db.select(db.func.count()).select_from(CreditNoteRequest).where(CreditNoteRequest.status == "pending")).scalar(),
                 "paid_total": f"{sum((money(row['paid_amount']) for row in rows), Decimal(0)):.2f}",
@@ -577,6 +636,39 @@ class FinanceService:
             return "'" + value if value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else value
         for row in self.list_enrollments():
             writer.writerow([safe(value) for value in [row["id"], row["full_name"], row["course"], row["course_date"], row["invoice"]["number"] if row["invoice"] else "", row["status"], row["paid_amount"], row["outstanding_amount"], row["overdue"]]])
+        return output.getvalue()
+
+    def payment_report_xlsx(self):
+        from openpyxl import Workbook
+        from openpyxl.utils import get_column_letter
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Payment submissions"
+        sheet.append(["Evidence ID", "Enrollment ID", "Participant", "Course", "Intake", "Invoice", "Invoice SGD", "SkillsFuture claim SGD", "Claim status", "Screenshot amount SGD", "Verified payment SGD", "Total verified SGD", "Balance SGD", "Review status", "Flags", "Submitted", "Reviewed", "Reviewer", "Note"])
+        for review in db.session.execute(db.select(PaymentReview).order_by(PaymentReview.created_at.desc())).scalars():
+            evidence = db.session.get(PaymentEvidence, review.evidence_id)
+            enrollment = self.serialize_enrollment(db.session.get(EnrollmentDraft, review.enrollment_id))
+            facts = {**json.loads(evidence.extracted_json), **json.loads(review.corrections_json or "{}")}
+            verified = next((item["amount"] for item in enrollment["payments"] if item["evidence_id"] == evidence.id), "0.00")
+            invoice = enrollment["invoice"] or {}
+            values = [evidence.id, enrollment["id"], enrollment["full_name"], enrollment["course"], enrollment["intake_display"], invoice.get("number"), invoice.get("course_fee"), facts.get("skillsfuture_claim_amount"), facts.get("skillsfuture_claim_status"), facts.get("amount"), verified, enrollment["paid_amount"], enrollment["outstanding_amount"], review.status, ", ".join(json.loads(review.reasons_json)), iso(review.created_at), iso(review.decided_at), review.decided_by, review.note]
+            sheet.append([("'" + value if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else value) for value in values])
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            letter = get_column_letter(column[0].column)
+            sheet.column_dimensions[letter].width = min(36, max(14, max(len(str(cell.value or "")) for cell in column) + 2))
+        verified_sheet = workbook.create_sheet("Verified payments")
+        verified_sheet.append(["Payment ID", "Evidence ID", "Enrollment ID", "Invoice", "Method", "Verified SGD", "Reference", "Transaction date", "Confirmed by", "Recorded at"])
+        for payment in db.session.execute(db.select(Payment).order_by(Payment.created_at)).scalars():
+            invoice = db.session.get(Invoice, payment.invoice_id)
+            values = [payment.id, payment.evidence_id, payment.enrollment_id, invoice.number if invoice else None,
+                payment.method, str(payment.amount), payment.reference, iso(payment.transaction_date), payment.confirmed_by, iso(payment.created_at)]
+            verified_sheet.append([("'" + value if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else value) for value in values])
+        verified_sheet.freeze_panes = "A2"
+        verified_sheet.auto_filter.ref = verified_sheet.dimensions
+        output = BytesIO()
+        workbook.save(output)
         return output.getvalue()
 
     def run_balance_reminders(self, today=None):

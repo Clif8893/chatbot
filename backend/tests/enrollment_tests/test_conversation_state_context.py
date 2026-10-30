@@ -177,7 +177,7 @@ def test_confirmed_enrollment_cannot_be_discarded(tmp_path, fake_ai):
         "Continue from where we stopped.",
     ],
 )
-def test_progress_variants_are_deterministic_and_draft_grounded(
+def test_progress_variants_are_semantically_routed_and_draft_grounded(
     tmp_path, fake_ai, question
 ):
     app = context_app(tmp_path, fake_ai)
@@ -188,17 +188,14 @@ def test_progress_variants_are_deterministic_and_draft_grounded(
 
     response = send(client, conversation_id, question).get_json()
     content = response["message"]["content"]
-    assert "Saved Information" in content
-    assert "test.student@example.com" in content
-    assert "Still Needed" in content
-    assert "Full name" in content
+    assert "full name" in content.casefold()
     assert "Payment method" not in content
     assert "SkillsFuture amount" not in content
     assert "PayNow amount" not in content
     assert "Course Fee" not in content
     assert "Mid-Career SkillsFuture" not in content
     assert "image_url" not in response["message"]
-    assert len(fake_ai.classify_calls) == before
+    assert len(fake_ai.classify_calls) == before + 1
     assert len(fake_ai.faq_calls) == 0
 
 
@@ -213,7 +210,7 @@ def test_repeated_progress_is_consistent_and_masks_nric(tmp_path, fake_ai):
     assert first["message"]["content"] == second["message"]["content"]
     assert OLD_NRIC not in first["message"]["content"]
     assert "S*******D" in first["message"]["content"]
-    assert len(fake_ai.classify_calls) == 0
+    assert len(fake_ai.classify_calls) == 2
 
 
 @pytest.mark.parametrize("payment_method", [None, "paynow", "skillsfuture_paynow"])
@@ -232,7 +229,7 @@ def test_progress_never_surfaces_historical_payment_fields(
         assert label not in content
 
 
-def test_fee_interruption_preserves_draft_and_continue_resumes_without_ai(
+def test_fee_interruption_preserves_draft_and_continue_resumes_semantically(
     tmp_path, fake_ai
 ):
     app = context_app(tmp_path, fake_ai)
@@ -244,13 +241,15 @@ def test_fee_interruption_preserves_draft_and_continue_resumes_without_ai(
     # The participant is enrolling in Dental Assisting, so only that fee is given.
     assert "$600 nett" in faq["message"]["content"]
     assert "$450" not in faq["message"]["content"]
-    assert "continue with your remaining enrollment details" in faq["message"]["content"]
+    assert "continue where you left off" in faq["message"]["content"]
+    assert "8-digit Singapore mobile number" in faq["message"]["content"]
     classify_after_faq = len(fake_ai.classify_calls)
 
     resumed = send(client, conversation_id, "Okay, continue.").get_json()
-    assert "current enrollment progress" in resumed["message"]["content"]
+    assert "Great, Test" in resumed["message"]["content"]
+    assert "8-digit Singapore mobile number" in resumed["message"]["content"]
     assert "course fee" not in resumed["message"]["content"].casefold()
-    assert len(fake_ai.classify_calls) == classify_after_faq
+    assert len(fake_ai.classify_calls) == classify_after_faq + 1
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         assert draft.full_name == "Test Student"

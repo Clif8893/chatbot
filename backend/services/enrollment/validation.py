@@ -33,13 +33,39 @@ FIELD_LABELS = {
 }
 
 
-def parse_date(value):
+def parse_date(value, *, as_of_date=None, minimum_age=16, maximum_age=100):
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
     try:
         normalized = re.sub(r"(?i)(\d{1,2})(?:st|nd|rd|th)\b", r"\1", str(value))
+        normalized = " ".join(normalized.strip().split())
+        # Compact dates are common on mobile keyboards.  Their order is
+        # deterministic here: DDMMYYYY, except an unmistakable leading year.
+        if re.fullmatch(r"\d{8}", normalized):
+            year_first = (
+                normalized.startswith(("19", "20"))
+                and 1 <= int(normalized[4:6]) <= 12
+                and 1 <= int(normalized[6:8]) <= 31
+            )
+            date_format = "%Y%m%d" if year_first else "%d%m%Y"
+            return datetime.strptime(normalized, date_format).date()
+        if re.fullmatch(r"\d{6}", normalized):
+            day, month, short_year = (
+                int(normalized[:2]), int(normalized[2:4]), int(normalized[4:])
+            )
+            today = as_of_date or current_date_in()
+            for year in (2000 + short_year, 1900 + short_year):
+                try:
+                    candidate = date(year, month, day)
+                except ValueError:
+                    continue
+                if candidate < today and minimum_age <= calculate_age(candidate, today) <= maximum_age:
+                    return candidate
+            # Keep an out-of-range but valid date for the age validator to
+            # explain. A malformed calendar date still fails parsing.
+            return datetime.strptime(normalized, "%d%m%y").date()
         if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}", normalized.strip()):
             return datetime.strptime(normalized.strip(), "%d/%m/%Y").date()
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized.strip()):
@@ -124,8 +150,10 @@ def validate_field(
         return normalized, None
 
     if field == "date_of_birth":
-        normalized = parse_date(value)
         today = as_of_date or current_date_in(timezone_name)
+        normalized = parse_date(
+            value, as_of_date=today, minimum_age=minimum_age, maximum_age=maximum_age
+        )
         if not normalized or normalized >= today:
             return None, _dob_error()
         age = calculate_age(normalized, today)
@@ -173,8 +201,8 @@ def validate_field(
 def _dob_error():
     return (
         "Please check your date of birth. Applicants must provide a valid past "
-        "date and meet the minimum enrollment age. Enter your date of birth in "
-        "DD/MM/YYYY format, for example: 15/05/2000."
+        "date and meet the minimum enrollment age. You can type it naturally, "
+        "for example 15/05/2000, 2000-05-15, or 15 May 2000."
     )
 
 

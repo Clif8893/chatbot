@@ -250,6 +250,16 @@ def test_generates_official_template_pdf_for_full_course_fee_without_payment_spl
         assert values["_image_count"] == 1
         assert "A5:K5" in values["_merged_ranges"]
         assert values["_print_area"] == "'Invoice'!$A$1:$K$43"
+        generated_pdf = PdfReader(
+            BytesIO(app.extensions["invoice_template"].document_bytes(record))
+        )
+        assert len(generated_pdf.pages) == 2
+        payment_text = generated_pdf.pages[1].extract_text()
+        assert "TEST PAYMENT QR" in payment_text
+        assert "Scan this test QR to simulate payment" in payment_text
+        assert "S$600.00" in payment_text
+        assert "NOT A REAL PAYMENT CODE" in payment_text
+        assert "DEMO-INV-2027-000001" in payment_text
         assert not fake_ai.classify_calls
         assert not fake_ai.faq_calls
         assert not fake_ai.enrollment_calls

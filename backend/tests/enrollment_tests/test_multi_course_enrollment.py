@@ -44,7 +44,8 @@ def _complete_both(client, conversation_id):
     first = send(client, conversation_id, "1").get_json()
     assert "Now choose an intake for Course 2" in first["message"]["content"]
     second = send(client, conversation_id, "1").get_json()
-    assert "Full name as shown on NRIC" in second["message"]["content"]
+    assert "May I have your full name" in second["message"]["content"]
+    assert "NRIC/FIN" not in second["message"]["content"]
     ready = send(
         client,
         conversation_id,

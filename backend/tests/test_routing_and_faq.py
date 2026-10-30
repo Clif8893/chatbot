@@ -29,7 +29,8 @@ def test_faq_routes_to_faq_agent_and_lists_exact_courses(client, conversation_id
     content = payload["message"]["content"]
     assert response.status_code == 200
     assert payload["routing"]["intent"] == "faq"
-    assert payload["routing"]["agent"] == "faq_agent"
+    assert payload["routing"]["agent"] == "faq"
+    assert payload["routing"]["handler"] == "crewai"
     assert "Basic Certificate in Dental Assisting" in content
     assert "Certificate in Dental Clinic Front Desk Operations" in content
     assert "$600 nett" in content and "$450 nett" in content
@@ -70,7 +71,7 @@ def test_current_dates_come_from_the_catalogue(client, conversation_id, fake_ai)
         "2 December 2026", "9 January 2027", "3 February 2027",
     ):
         assert expected in reply
-    assert fake_ai.classify_calls == []
+    assert len(fake_ai.classify_calls) == 1
     assert fake_ai.faq_calls == []
     assert fake_ai.enrollment_calls == []
 
@@ -135,7 +136,7 @@ def test_unclear_message_requests_clarification(client, conversation_id):
 def test_enrollment_routes_to_agent_without_selecting(client, conversation_id):
     payload = send(client, conversation_id, "I would like to register").get_json()
     assert payload["routing"]["intent"] == "enrollment"
-    assert payload["routing"]["agent"] == "enrollment_agent"
+    assert payload["routing"]["agent"] == "enrollment"
     assert payload["enrollment"]["course_id"] is None
     assert "$600 nett" in payload["message"]["content"]
     assert "$450 nett" in payload["message"]["content"]

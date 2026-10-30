@@ -87,7 +87,9 @@ def test_cancellation_requires_explicit_confirmation_and_can_be_kept(tmp_path, f
     request = send(client, conversation_id, "Cancel my enrollment").get_json()
     assert "Confirm cancellation" in request["message"]["content"]
     assert "S1234567D" not in request["message"]["content"]
-    assert len(fake_ai.classify_calls) == before
+    assert len(fake_ai.classify_calls) == before + 1
+    assert request["routing"]["handler"] == "deterministic"
+    assert request["routing"]["rule"] == "cancellation_confirmation_required"
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         conversation = db.session.get(Conversation, conversation_id)

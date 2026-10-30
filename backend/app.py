@@ -16,6 +16,7 @@ from backend.extensions import db
 from backend.models import (  # noqa: F401
     Conversation,
     EnrollmentDraft,
+    Message,
     communications,
     finance,
     operations,
@@ -42,6 +43,9 @@ from backend.services.database_migrations import (
 )
 from backend.services.delivery_service import DeliveryService
 from backend.services.enrollment.enrollment_management_service import EnrollmentManagementService
+from backend.services.enrollment.lead_handoff_service import (
+    EnrollmentLeadHandoffService,
+)
 from backend.services.finance_service import FinanceService
 from backend.services.invoice_template_service import InvoiceTemplateService
 from backend.services.invoice_email_service import (
@@ -191,6 +195,12 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         intake_service=intake_service,
         master_invoice_service=master_invoice_service,
     )
+    lead_handoff_service = EnrollmentLeadHandoffService(
+        catalogue,
+        repository,
+        operations_service,
+        validation_options=enrollment_validation_options,
+    )
     app.extensions.update(
         delivery=delivery,
         finance=finance_service,
@@ -201,6 +211,7 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         enrollment_management=enrollment_management_service,
         enrollment_resolver=enrollment_resolver,
         operations=operations_service,
+        lead_handoff=lead_handoff_service,
         intakes=intake_service,
     )
 
@@ -560,13 +571,48 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
                 upload.read(),
                 upload.mimetype,
                 channel="web",
+                source_event_id=request.form.get("submission_id") or None,
                 payment_type=request.form.get("payment_type", "paynow"),
             )
+            evidence = result["evidence"]
+            existing_message = db.session.execute(db.select(Message).where(
+                Message.conversation_id == conversation.id,
+                Message.image_url == f"/api/conversations/{conversation.id}/evidence/{evidence['id']}",
+            )).scalar_one_or_none()
+            if existing_message is None:
+                note = (request.form.get("message") or "").strip()[:2000]
+                repository.add_message(conversation, "user", note or "Payment screenshot attached",
+                    image_url=f"/api/conversations/{conversation.id}/evidence/{evidence['id']}",
+                    image_alt="Payment screenshot", image_status="pending_review")
+                repository.add_message(conversation, "assistant",
+                    "I received your screenshot. It is pending staff review; your balance will change only after payment is verified.",
+                    agent_name="payment", outcome_status="success")
             db.session.commit()
+            result["messages"] = [serialize_message(message) for message in repository.all_messages(conversation)]
             return jsonify(result), 201
         except ValueError as error:
             db.session.rollback()
             return _error_response("INVALID_EVIDENCE", str(error), 400)
+        except Exception as error:
+            db.session.rollback()
+            app.logger.error("Payment upload failed (%s)", type(error).__name__)
+            return _error_response(
+                "PAYMENT_PROCESSING_FAILED",
+                "We could not process the screenshot. Please try again or contact staff.",
+                500,
+            )
+
+    @app.get("/api/conversations/<conversation_id>/evidence/<evidence_id>")
+    @participant_required
+    def participant_payment_evidence(conversation_id, evidence_id):
+        conversation = repository.get_for_user(conversation_id, current_participant_id())
+        evidence = db.session.get(finance.PaymentEvidence, evidence_id)
+        if not conversation or not evidence or not conversation.enrollment_draft or evidence.enrollment_id != conversation.enrollment_draft.id:
+            return _error_response("NOT_FOUND", "Payment screenshot was not found.", 404)
+        response = send_file(BytesIO(finance_service.storage.read(evidence.storage_key)), mimetype=evidence.mime_type)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.get(
         "/api/conversations/<conversation_id>/documents/<document_id>"
@@ -638,6 +684,44 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         click.echo(f"Backup directory: {result['backup']['directory']}")
         click.echo(f"Removed invoice PDFs: {result['removed_invoice_pdfs']}")
         click.echo(f"Remaining enrollments: {result['after']['enrollment_total']}")
+
+    @app.cli.command("seed-enrollment-lead")
+    @click.option("--conversation-id", required=True)
+    @click.option("--full-name", required=True)
+    @click.option("--phone-number", required=True)
+    @click.option("--course", "selected_course", required=True)
+    @click.option("--intake", "preferred_intake_date", required=True)
+    @click.option("--lead-status", default="qualified", show_default=True)
+    def seed_enrollment_lead(
+        conversation_id,
+        full_name,
+        phone_number,
+        selected_course,
+        preferred_intake_date,
+        lead_status,
+    ):
+        """Seed a validated development lead without the enquiry agent."""
+        if app.config.get("PRODUCTION"):
+            raise click.ClickException(
+                "Development lead seeding is disabled in production."
+            )
+        try:
+            draft = lead_handoff_service.receive(
+                conversation_id=conversation_id,
+                full_name=full_name,
+                phone_number=phone_number,
+                selected_course=selected_course,
+                preferred_intake_date=preferred_intake_date,
+                lead_status=lead_status,
+            )
+            db.session.commit()
+        except (LookupError, ValueError) as error:
+            db.session.rollback()
+            raise click.ClickException(str(error)) from error
+        click.echo(
+            "Enrollment lead seeded for conversation "
+            f"{draft.conversation_id}; draft {draft.id}."
+        )
 
     @app.cli.command("process-invoice-emails")
     @click.option("--limit", default=100, type=click.IntRange(1, 500))

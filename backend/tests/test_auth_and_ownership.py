@@ -1,5 +1,7 @@
 """Participant authentication, ownership and staff-boundary regression tests."""
 
+import pytest
+
 from werkzeug.security import generate_password_hash
 
 from backend.app import create_app
@@ -41,6 +43,32 @@ def test_registration_login_and_password_hashing(app):
     )
     assert login.status_code == 200
     assert login.get_json()["user"]["email"] == "account@example.com"
+
+
+def test_guest_chat_session_needs_only_a_name_and_owns_fresh_chats(app):
+    client = app.test_client()
+    response = client.post("/api/auth/guest", json={"full_name": "Dhiraj"})
+
+    assert response.status_code == 201
+    auth = response.get_json()
+    assert auth["authenticated"] is True
+    assert auth["user"]["full_name"] == "Dhiraj"
+    assert auth["user"]["email"] is None
+    assert auth["user"]["guest"] is True
+
+    first = csrf_post(client, "/api/conversations", auth["csrf_token"])
+    second = csrf_post(client, "/api/conversations", auth["csrf_token"])
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.get_json()["conversation_id"] != second.get_json()["conversation_id"]
+    assert client.get("/api/conversations").status_code == 200
+
+
+@pytest.mark.parametrize("payload", [{}, {"full_name": " "}, {"full_name": "A"}])
+def test_guest_chat_rejects_missing_or_invalid_name(app, payload):
+    response = app.test_client().post("/api/auth/guest", json=payload)
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "INVALID_GUEST"
 
 
 def test_chatbot_endpoints_require_participant_session(app):

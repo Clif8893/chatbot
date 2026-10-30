@@ -74,7 +74,7 @@ def test_approved_intakes_remain_available_when_demo_flag_is_disabled(tmp_path, 
     assert "Available Intake Dates" in response["message"]["content"]
     assert "18–19 November 2026" in response["message"]["content"]
     assert "2 December 2026" in response["message"]["content"]
-    assert fake_ai.classify_calls == []
+    assert len(fake_ai.classify_calls) == 1
     assert fake_ai.faq_calls == []
 
 
@@ -96,7 +96,7 @@ def test_database_backed_intake_query_lists_all_approved_choices(tmp_path, fake_
     assert "3 February 2027 — Weekday" in content
     assert "— Open" not in content
     assert "dates are being updated" not in content
-    assert fake_ai.classify_calls == []
+    assert len(fake_ai.classify_calls) == 1
     assert fake_ai.faq_calls == []
     assert fake_ai.enrollment_calls == []
 
@@ -179,7 +179,7 @@ def prepare_progress_draft(client):
     return conversation_id
 
 
-def test_progress_reply_uses_database_state_and_masks_nric_without_ai(tmp_path, fake_ai):
+def test_progress_reply_uses_database_state_and_masks_nric_without_extraction(tmp_path, fake_ai):
     app = regression_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id = prepare_progress_draft(client)
@@ -204,9 +204,9 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_ai(tmp_path, 
     assert "requires the corrections shown above" in content
     assert "already recorded" not in content
     assert "confirmed information" not in content
-    assert calls_before == (
+    assert (
         len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls)
-    )
+    ) == (calls_before[0] + 1, calls_before[1], calls_before[2])
 
 
 @pytest.mark.parametrize(
@@ -223,7 +223,7 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_ai(tmp_path, 
         "What details I give already?",
     ],
 )
-def test_progress_paraphrases_and_singlish_are_deterministic(tmp_path, fake_ai, question):
+def test_progress_paraphrases_use_semantic_routing_and_deterministic_data(tmp_path, fake_ai, question):
     app = regression_app(tmp_path, fake_ai, name=f"progress-{abs(hash(question))}.db")
     client = authenticated_client(app)
     conversation_id = prepare_progress_draft(client)
@@ -231,7 +231,7 @@ def test_progress_paraphrases_and_singlish_are_deterministic(tmp_path, fake_ai, 
     response = send(client, conversation_id, question).get_json()
     after = len(fake_ai.classify_calls) + len(fake_ai.faq_calls) + len(fake_ai.enrollment_calls)
     assert "current enrollment progress" in response["message"]["content"]
-    assert after == before
+    assert after == before + 1
 
 
 def test_confirmed_progress_uses_confirmed_status_wording(tmp_path, fake_ai):

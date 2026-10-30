@@ -1,4 +1,4 @@
-const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:5000";
+const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
 export const apiBaseUrl = configuredBaseUrl.replace(/\/$/, "");
 let csrfToken = "";
 
@@ -10,16 +10,8 @@ export function getAuthSession() {
   return requestJson("/api/auth/session");
 }
 
-export function registerParticipant(fullName, email, password) {
-  return postJson("/api/auth/register", { full_name: fullName, email, password });
-}
-
-export function loginParticipant(email, password) {
-  return postJson("/api/auth/login", { email, password });
-}
-
-export function logoutParticipant() {
-  return postJson("/api/auth/logout", {});
+export function createGuestSession(fullName) {
+  return postJson("/api/auth/guest", { full_name: fullName });
 }
 
 export async function createConversation() {
@@ -83,14 +75,24 @@ export function resendParticipantInvoiceEmail(enrollmentId, confirm = false) {
   );
 }
 
-export function uploadEvidence(conversationId, file, paymentType) {
+export async function uploadEvidence(conversationId, file, paymentType, message = "", submissionId = "") {
   const body = new FormData();
   body.append("file", file);
   body.append("payment_type", paymentType);
-  return requestJson(`/api/conversations/${encodeURIComponent(conversationId)}/evidence`, {
+  body.append("message", message);
+  body.append("submission_id", submissionId);
+  const path = `/api/conversations/${encodeURIComponent(conversationId)}/evidence`;
+  const options = {
     method: "POST",
     body,
-  });
+  };
+  try {
+    return await requestJson(path, options);
+  } catch (error) {
+    if (error.code !== "NETWORK_ERROR") throw error;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    return requestJson(path, options);
+  }
 }
 
 export function documentUrl(documentId, conversationId = "") {
@@ -117,7 +119,9 @@ export async function requestJson(path, options = {}) {
   try {
     response = await fetch(`${apiBaseUrl}${path}`, { ...options, credentials: "include", headers });
   } catch {
-    throw new Error("We’re unable to connect right now. Please try again shortly.");
+    const error = new Error("We’re unable to connect right now. Please try again shortly.");
+    error.code = "NETWORK_ERROR";
+    throw error;
   }
   const payload = await readJson(response);
   if (!response.ok) {

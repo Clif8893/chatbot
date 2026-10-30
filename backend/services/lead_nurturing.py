@@ -92,7 +92,16 @@ class LeadNurturing:
 
     # Public entry point -------------------------------------------------
 
-    def route(self, conversation, text, *, first_contact, greeting=None, context_course=None):
+    def route(
+        self,
+        conversation,
+        text,
+        *,
+        first_contact,
+        greeting=None,
+        context_course=None,
+        allow_welcome=True,
+    ):
         message = str(text or "").strip()
         normalized = _normalize(message)
 
@@ -107,9 +116,14 @@ class LeadNurturing:
             return self._handoff(conversation, message, "human_request")
         if _SENSITIVE.search(message):
             return self._handoff(conversation, message, "sensitive", _sensitive_subject(message))
-        if first_contact and greeting:
+        if allow_welcome and first_contact and greeting:
             return self._welcome(greeting)
-        if first_contact and _GENERIC_INFO.search(message) and not _SPECIFIC_TOPIC.search(message):
+        if (
+            allow_welcome
+            and first_contact
+            and _GENERIC_INFO.search(message)
+            and not _SPECIFIC_TOPIC.search(message)
+        ):
             # "More info on the front desk course" describes only that course.
             intro = self.catalogue.approved_faq_reply(
                 ["course description"], course=self.catalogue.focus_course(message)
@@ -126,7 +140,7 @@ class LeadNurturing:
 
     def menu_text(self):
         options = self.content.get("menu_options", [])
-        lines = ["Reply with a number:"]
+        lines = ["You can reply with a number, or ask in your own words:"]
         lines.extend(f"{item['key']}. {item['label']}" for item in options)
         footer = self.content.get("menu_footer")
         if footer:
@@ -139,6 +153,15 @@ class LeadNurturing:
         if self.channel in {"whatsapp", "email"} and notice:
             return f"\n\n{notice}"
         return ""
+
+    def mark_interested(self, conversation):
+        """Qualify a lead after a genuine interest signal without collecting PII."""
+        if self.operations is None:
+            return None
+        lead = self.operations.lead_for(conversation.id)
+        if lead.status not in {"enrolled", "declined", "escalated"}:
+            lead.status = "qualified"
+        return lead
 
     def escalate_unanswered(self, conversation, message):
         """Flag a question that approved content cannot answer; return the note to append."""
@@ -202,7 +225,7 @@ class LeadNurturing:
             option.get("faq_topics", []), course=context_course
         )
         return LeadRouting(
-            reply=f"{reply}\n\nReply with another number from the menu, or type your question.",
+            reply=f"{reply}\n\nYou can choose another menu number, or ask in your own words.",
             followup=WELCOME_MENU_FOLLOWUP,
         )
 

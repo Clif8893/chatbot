@@ -1306,8 +1306,35 @@ class EnrollmentManagementService:
             if len(confirmed) == 1 and current_draft is None
             else "📋 Enrollment Status"
         ]
+        if current_draft is not None:
+            lines.extend(["", "Current conversation", "- Status: Not confirmed yet"])
+            pending_followup = str(conversation.pending_followup or "")
+            if pending_followup.startswith("enrollment_correction:"):
+                field = pending_followup.removeprefix("enrollment_correction:")
+                lines.append(
+                    f"- Pending change: {self.catalogue.enrollment_field_label(field)}"
+                )
+                if field == "mobile_number":
+                    lines.append(
+                        "- Next step: Send the new 8-digit mobile number, or say "
+                        "‘Keep current number’."
+                    )
+
+                if field != "mobile_number":
+                    label = self.catalogue.enrollment_field_label(field).casefold()
+                    lines.append(
+                        f"- Next step: Send the new {label}, or say Keep current."
+                    )
+
         if confirmed:
-            lines.extend(["", "Confirmed enrollments"])
+            lines.extend(
+                [
+                    "",
+                    "Previous confirmed enrollments"
+                    if current_draft is not None
+                    else "Confirmed enrollments",
+                ]
+            )
             number = 1
             for draft, entries in confirmed:
                 for course, intake_display, _ in entries:
@@ -1331,8 +1358,7 @@ class EnrollmentManagementService:
                     lines.append(f"   Current invoice total: S${amount:.2f}")
 
         if current_draft is not None:
-            lines.extend(["", "Current draft"])
-            lines.append("- Status: Draft — more information is required")
+            lines.extend(["", "Current draft details"])
             course = self.catalogue.course_for(
                 current_draft.course_id or current_draft.course
             )
@@ -1352,6 +1378,12 @@ class EnrollmentManagementService:
             from backend.services.enrollment.enrollment_service import EnrollmentService
 
             missing = EnrollmentService.missing_fields(current_draft, self.catalogue)
+            if not pending_followup.startswith("enrollment_correction:"):
+                lines.append(
+                    "- Status detail: Draft — more information is required"
+                    if missing
+                    else "- Status detail: Ready for your confirmation"
+                )
             if missing:
                 lines.append(
                     "- Still needed: "
@@ -2628,12 +2660,13 @@ class EnrollmentManagementService:
 
     @staticmethod
     def _duplicate_for(draft, course_name, intake_id):
-        if not draft.nric:
+        if not draft.nric or not draft.mobile_number:
             return False
         return (
             EnrollmentDraft.query.filter(
                 EnrollmentDraft.id != draft.id,
                 EnrollmentDraft.nric == draft.nric,
+                EnrollmentDraft.mobile_number == draft.mobile_number,
                 EnrollmentDraft.course == course_name,
                 EnrollmentDraft.intake_id == intake_id,
                 EnrollmentDraft.status.in_(tuple(ACTIVE_STATUSES | {"awaiting_confirmation"})),

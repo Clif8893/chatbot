@@ -22,7 +22,7 @@ export default function MessageBubble({ message }) {
       <article className={`message-bubble message-bubble--${message.sender}`}>
         {isBot && <span className="message-sender">Q&amp;M Assistant</span>}
         <p>{message.text}</p>
-        {isBot && message.imageUrl && message.imageAlt && (
+        {message.imageUrl && message.imageAlt && (
           <a
             className="message-attachment-link"
             href={message.imageUrl}

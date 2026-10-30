@@ -157,6 +157,7 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
     assert schemas == [
         IntentClassification,
         FAQAnswer,
+        IntentClassification,
         EnrollmentExtraction,
     ]
     assert all(isinstance(crew.agent, Agent) for crew in recorded)

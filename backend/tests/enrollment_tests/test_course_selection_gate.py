@@ -148,11 +148,11 @@ def test_valid_intake_starts_participant_details_without_requesting_intake_again
     content = payload["message"]["content"]
 
     assert content.count("Enrollment Started") == 1
-    assert "Full name as shown on NRIC" in content
-    assert "NRIC/FIN" in content
-    assert "Date of birth" in content
-    assert "Email address" in content
-    assert "Mobile number" in content
+    assert "May I have your full name" in content
+    assert "NRIC/FIN" not in content
+    assert "Date of birth" not in content
+    assert "Email address" not in content
+    assert "Mobile number" not in content
     assert "Preferred intake/date" not in content
     assert not any(
         field in content
@@ -187,7 +187,8 @@ def test_two_courses_require_each_stage_before_participant_details(
 
     second = send(client, conversation_id, "1").get_json()
     assert "Enrollment Started" in second["message"]["content"]
-    assert "Full name as shown on NRIC" in second["message"]["content"]
+    assert "May I have your full name" in second["message"]["content"]
+    assert "NRIC/FIN" not in second["message"]["content"]
     assert all(row["selected_intake"] for row in second["enrollment"]["courses"])
 
 
@@ -244,6 +245,51 @@ class HallucinatingCourseAI(FakeAIService):
                 course="Basic Certificate in Dental Assisting"
             )
         )
+
+
+class DateRangeInterpretingAI(FakeAIService):
+    """Simulate a model incorrectly treating an intake reply as a birth date."""
+
+    def extract_enrollment(self, message, context, draft_state, tools=None):
+        self.enrollment_calls.append(
+            {
+                "message": message,
+                "context": context,
+                "draft_state": draft_state,
+                "tools": list(tools or []),
+            }
+        )
+        return EnrollmentExtraction(
+            extracted_fields=EnrollmentFields(
+                date_of_birth="2001 September 11",
+                preferred_intake_date="2026 September 9",
+            )
+        )
+
+
+def test_invalid_date_range_at_intake_gate_never_saves_date_of_birth(tmp_path):
+    ai_service = DateRangeInterpretingAI()
+    app = _app(tmp_path, ai_service, name="intake-date-range.db")
+    client = authenticated_client(app)
+    conversation_id = _new_chat(client)
+    _open_gate(client, conversation_id)
+    send(client, conversation_id, "1")
+
+    calls_before = len(ai_service.enrollment_calls)
+    response = send(
+        client,
+        conversation_id,
+        "2001 september 11 - 2026 september 9",
+    ).get_json()
+
+    assert "Please reply with the intake number" in response["message"]["content"]
+    assert "Available Intake Dates" in response["message"]["content"]
+    assert response["enrollment"]["selected_intake"] is None
+    assert len(ai_service.enrollment_calls) == calls_before
+    with app.app_context():
+        draft = EnrollmentDraft.query.one()
+        assert draft.date_of_birth is None
+        assert draft.preferred_intake_date is None
 
 
 def test_model_course_without_current_message_evidence_is_ignored(tmp_path):

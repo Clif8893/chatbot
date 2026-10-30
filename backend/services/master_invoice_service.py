@@ -340,6 +340,7 @@ class MasterInvoiceService:
             duplicate = EnrollmentDraft.query.filter(
                 EnrollmentDraft.id != enrollment.id,
                 EnrollmentDraft.nric == enrollment.nric,
+                EnrollmentDraft.mobile_number == enrollment.mobile_number,
                 EnrollmentDraft.course == enrollment.course,
                 EnrollmentDraft.intake_id == enrollment.intake_id,
                 EnrollmentDraft.confirmed_at.is_not(None),

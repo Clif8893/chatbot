@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import ChatHeader from "./ChatHeader.jsx";
 import ChatWindow from "./ChatWindow.jsx";
 import MessageInput from "./MessageInput.jsx";
-import { createConversation, getConversationMessages, listConversations, sendChatMessage } from "../services/chatApi.js";
+import { apiBaseUrl, createConversation, getConversationMessages, listConversations, sendChatMessage, uploadEvidence } from "../services/chatApi.js";
 
 const welcomeMessage = {
   id: "welcome-message",
@@ -40,7 +40,7 @@ export function mapStoredMessages(messages) {
     message.content,
     message.timestamp,
     message.id,
-    message.image_url,
+    message.image_url?.startsWith("/api/") ? `${apiBaseUrl}${message.image_url}` : message.image_url,
     message.image_alt,
     message.image_status,
   ));
@@ -57,6 +57,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
   const [isEnrollmentStarted, setIsEnrollmentStarted] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [paymentProgress, setPaymentProgress] = useState(false);
   const [error, setError] = useState("");
   const [previousChats, setPreviousChats] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -137,15 +138,22 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
     }
   }
 
-  async function handleSend(message, quickAction) {
+  async function handleSend(message, quickAction, attachment, submissionId, paymentType = "paynow") {
     if (!conversationId) {
       setError("A chat could not be started. Please select New Chat and try again.");
-      return;
+      return false;
     }
     setError("");
-    setMessages((current) => [...current, makeMessage("user", maskNricForDisplay(message))]);
+    setMessages((current) => [...current, makeMessage("user", attachment ? `${message || "Payment screenshot"} · Uploading…` : maskNricForDisplay(message))]);
     setIsLoading(true);
+    if (attachment) setPaymentProgress(true);
     try {
+      if (attachment) {
+        const result = await uploadEvidence(conversationId, attachment, paymentType, message, submissionId);
+        setMessages(mapStoredMessages(result.messages || []));
+        await refreshConversations();
+        return true;
+      }
       const response = await sendChatMessage(message, conversationId, quickAction);
       const reply = response.message;
       setMessages((current) => [...current, makeMessage(
@@ -163,8 +171,12 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
         onShowEnrollment?.();
       }
       await refreshConversations();
-    } catch (requestError) { setError(requestError.message); }
-    finally { setIsLoading(false); }
+    } catch (requestError) {
+      if (attachment) setMessages((current) => current.slice(0, -1));
+      setError(requestError.message);
+      return false;
+    }
+    finally { setIsLoading(false); setPaymentProgress(false); }
   }
 
   return <main className="chat-shell" aria-labelledby="chat-title">
@@ -189,7 +201,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
       </section>}
     </div>
     <ChatWindow messages={messages} isLoading={isLoading} quickActions={isEnrollmentStarted ? [] : quickActions} onQuickAction={handleSend} />
-    <MessageInput onSend={handleSend} isLoading={isLoading} error={error} />
+    <MessageInput onSend={handleSend} isLoading={isLoading} error={error} paymentProgress={paymentProgress} />
   </main>;
 }
 

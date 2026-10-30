@@ -4,7 +4,10 @@ import re
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import and_, or_
+
 from backend.extensions import db
+from backend.agents.schemas import EnrollmentExtraction
 from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft, utc_now
 from backend.services.enrollment.registration_group_service import (
     add_course,
@@ -30,10 +33,12 @@ from backend.tools.enrollment import build_enrollment_tools
 
 IDENTITY_FIELDS = (
     "full_name",
-    "nric",
-    "date_of_birth",
-    "email",
     "mobile_number",
+    "email",
+    "date_of_birth",
+    # NRIC/FIN is intentionally last.  It is requested only after the ordinary
+    # lead/contact fields, when official registration and invoicing can proceed.
+    "nric",
 )
 ENROLLMENT_FIELDS = (
     "course",
@@ -45,6 +50,7 @@ INTAKE_SELECTION_FOLLOWUP = "intake_selection"
 COURSE_SELECTION_FOLLOWUP = "course_selection"
 COURSE_OPTIONS_KEY = "course_options"
 POST_CONFIRMATION_ADD_COURSE_FOLLOWUP = "post_confirmation_add_course"
+CORRECTION_FOLLOWUP_PREFIX = "enrollment_correction:"
 
 
 class EnrollmentService:
@@ -64,7 +70,14 @@ class EnrollmentService:
         self.intake_service = intake_service
         self.validation_options = dict(validation_options or {})
 
-    def handle(self, conversation, message, context, last_assistant_message=None):
+    def handle(
+        self,
+        conversation,
+        message,
+        context,
+        last_assistant_message=None,
+        deterministic_confirmation=None,
+    ):
         draft = conversation.enrollment_draft
         if draft is not None and draft.status == "discarded":
             draft = None
@@ -78,24 +91,61 @@ class EnrollmentService:
             if initial_selection is not None:
                 return initial_selection
             draft = conversation.enrollment_draft
+        requested_correction = _requested_draft_correction_field(message)
+        if (
+            requested_correction is not None
+            and draft is not None
+            and not draft.confirmed_at
+            and not _message_contains_replacement(requested_correction, message)
+        ):
+            conversation.pending_followup = (
+                CORRECTION_FOLLOWUP_PREFIX + requested_correction
+            )
+            draft.status = "collecting"
+            errors = dict(draft.validation_errors or {})
+            errors.pop(requested_correction, None)
+            draft.validation_errors = errors
+            draft.pending_corrections = [requested_correction]
+            draft.validation_status = "incomplete"
+            return self.correction_prompt(draft, requested_correction), draft
         self._hydrate_structured_intake(draft)
         selection_reply = self._handle_course_selection(conversation, draft, message)
         if selection_reply is not None:
             return selection_reply, draft
-        tools = build_enrollment_tools(
-            self.repository,
-            self.catalogue,
-            conversation,
-            self.context_limit,
-            self.missing_fields,
-            self.validation_options,
+        # The chat router resolves obvious intake choices before classification so
+        # FAQs and casual interruptions can still be handled normally. If an
+        # enrollment-classified reply reaches this point while the persisted
+        # intake prompt is open, keep it inside that stage regardless of its
+        # shape. This prevents a date-like invalid intake response from reaching
+        # model extraction and being misinterpreted as a date of birth.
+        pending_intake = self.handle_pending_intake_selection(
+            conversation, message, enforce_pending_stage=True
         )
-        extraction = self.ai_service.extract_enrollment(
-            message=redact_identity_for_ai(message),
-            context=context,
-            draft_state=self._draft_state(draft),
-            tools=tools,
-        )
+        if pending_intake is not None:
+            return pending_intake
+        if deterministic_confirmation in {"confirm", "reject"}:
+            # The application already proved this is an exact answer to the open
+            # confirmation prompt. The LLM must not confirm or reject a record.
+            extraction = EnrollmentExtraction(confirmation=deterministic_confirmation)
+        elif self.is_pending_correction_answer(conversation, message):
+            # A value for the specific field the participant chose to change
+            # is parsed and validated locally, without model interpretation.
+            extraction = EnrollmentExtraction()
+        else:
+            tools = build_enrollment_tools(
+                self.repository,
+                self.catalogue,
+                conversation,
+                self.context_limit,
+                self.missing_fields,
+                self.validation_options,
+            )
+            extraction = self.ai_service.extract_enrollment(
+                message=redact_identity_for_ai(message),
+                context=context,
+                draft_state=self._draft_state(draft),
+                tools=tools,
+            )
         extracted_fields = extraction.extracted_fields.model_dump(exclude_none=True)
         # Course ownership is deterministic. A model-produced course cannot
         # create a selection without evidence from the current participant turn.
@@ -104,6 +154,17 @@ class EnrollmentService:
         # values take precedence over model interpretation and still pass through
         # the same validators below.
         parsed_fields = parse_enrollment_fields(message)
+        pending_correction = self.pending_correction_field(conversation)
+        correction_value = (
+            _unwrap_stage_answer(pending_correction, message)
+            if pending_correction is not None else None
+        )
+        if (
+            pending_correction is not None
+            and pending_correction not in parsed_fields
+            and _looks_like_bare_field_value(pending_correction, correction_value)
+        ):
+            parsed_fields[pending_correction] = correction_value
         extracted_fields.update(parsed_fields)
         for field, value in self._bare_stage_value(
             draft, message, last_assistant_message
@@ -192,7 +253,15 @@ class EnrollmentService:
             self._set_validation_state(
                 draft, "needs_correction", [field for field, _ in active_invalid]
             )
+            if pending_correction is not None:
+                conversation.pending_followup = (
+                    CORRECTION_FOLLOWUP_PREFIX + pending_correction
+                )
             return self._outcome_reply(draft, saved, active_invalid), draft
+
+        if pending_correction is not None and pending_correction in saved:
+            conversation.pending_followup = None
+            draft.pending_corrections = []
 
         missing = self.missing_fields(draft, self.catalogue)
         if missing:
@@ -297,7 +366,7 @@ class EnrollmentService:
         return identity_missing
 
     def next_step_prompt(self, draft):
-        """Return a short reminder for deterministic greeting interruptions."""
+        """Ask exactly one question, based only on the persisted draft state."""
         missing = self.missing_fields(draft, self.catalogue)
         if not missing:
             if draft.status == "awaiting_confirmation":
@@ -310,7 +379,255 @@ class EnrollmentService:
             return "The course fee requires staff confirmation before enrolment can continue."
         if first == "preferred_intake_date":
             return "Please select one of the available course intakes."
-        return f"I still need your {self.catalogue.enrollment_field_label(first).casefold()}."
+        questions = {
+            "full_name": "May I have your full name as shown on your official identification?",
+            "mobile_number": "May I have your 8-digit Singapore mobile number?",
+            "email": "May I have your email address?",
+            "date_of_birth": "May I have your date of birth?",
+            "nric": (
+                "For official registration and invoice preparation, may I have "
+                "your NRIC/FIN? It is required to prepare the official record and "
+                "will be masked whenever it is displayed."
+            ),
+        }
+        return questions[first]
+
+    @staticmethod
+    def pending_correction_field(conversation):
+        value = str(conversation.pending_followup or "")
+        if not value.startswith(CORRECTION_FOLLOWUP_PREFIX):
+            return None
+        field = value.removeprefix(CORRECTION_FOLLOWUP_PREFIX)
+        return field if field in IDENTITY_FIELDS else None
+
+    def is_pending_correction_answer(self, conversation, message):
+        field = self.pending_correction_field(conversation)
+        return bool(
+            field is not None
+            and _looks_like_bare_field_value(
+                field, _unwrap_stage_answer(field, message)
+            )
+        )
+
+    def correction_prompt(self, draft, field):
+        if field == "mobile_number":
+            ending = (
+                str(draft.mobile_number)[-4:]
+                if draft is not None and draft.mobile_number
+                else None
+            )
+            current = f" Your current number ends in {ending}." if ending else ""
+            return (
+                f"Sure — I can update your mobile number.{current} Please send the "
+                "new 8-digit Singapore mobile number, or say ‘Keep current number’ "
+                "if you do not want to change it."
+            )
+        label = self.catalogue.enrollment_field_label(field).casefold()
+        current = self._safe_display(field, getattr(draft, field, None))
+        current_note = f" The saved value is {current}." if current else ""
+        examples = {"nric": " It will be masked after validation."}
+        return (
+            f"Sure - I can update your {label}.{current_note} Please send the new "
+            f"{label}.{examples.get(field, '')} Or say 'Keep current' to leave it unchanged."
+        )
+
+    def draft_question_reply(self, conversation, draft, message):
+        """Answer questions about this draft without handing identity data to AI."""
+        if draft is None or draft.status in {"discarded", "cancelled"}:
+            return None
+        lookup = _draft_detail_lookup(message)
+        if lookup == "all":
+            return "details", self.progress_reply(draft)
+        if lookup is not None:
+            label = self.catalogue.enrollment_field_label(lookup)
+            value = self._draft_field_value(draft, lookup)
+            if value is None:
+                answer = f"You haven't provided your {label} yet."
+            else:
+                answer = self._draft_field_recall(lookup, value)
+            return "detail", answer + "\n\n" + self._interruption_followup(
+                conversation, draft
+            )
+
+        guidance_field, guidance_kind = _field_guidance_request(
+            message,
+            expected_field=self.pending_correction_field(conversation)
+            or self._next_identity_field(draft),
+        )
+        if guidance_field is None:
+            return None
+        guidance = self._field_guidance(guidance_field, guidance_kind)
+        return "guidance", guidance + "\n\n" + self._interruption_followup(
+            conversation, draft
+        )
+
+    def _next_identity_field(self, draft):
+        return next(
+            (
+                field
+                for field in self.missing_fields(draft, self.catalogue)
+                if field in IDENTITY_FIELDS
+            ),
+            None,
+        )
+
+    def _interruption_followup(self, conversation, draft):
+        correction = self.pending_correction_field(conversation)
+        if correction is not None:
+            return self.correction_prompt(draft, correction)
+        missing = self.missing_fields(draft, self.catalogue)
+        if missing:
+            return "To continue: " + self.next_step_prompt(draft)
+        if draft.status == "awaiting_confirmation":
+            return (
+                "Your particulars are complete. Reply 'Confirm enrollment' to submit, "
+                "or 'Change [field]' to update something."
+            )
+        return self._status_wording(draft)
+
+    @staticmethod
+    def _draft_field_value(draft, field):
+        if field == "course":
+            return draft.course
+        if field == "preferred_intake_date":
+            return draft.preferred_intake_date
+        return getattr(draft, field, None)
+
+    def _draft_field_recall(self, field, value):
+        if field == "mobile_number":
+            return f"For privacy, I can confirm that your saved mobile number ends in {str(value)[-4:]}."
+        if field == "nric":
+            return f"Your saved NRIC/FIN is {mask_nric(value)}."
+        if field == "email":
+            return f"Your saved email address is {_mask_email(value)}."
+        if field == "date_of_birth":
+            return f"Your saved date of birth is {_display_date(value)}."
+        if field == "preferred_intake_date":
+            return f"Your selected intake is {self._intake_display_from_value(value)}."
+        if field == "course":
+            return f"Your selected course is {value}."
+        return f"Your saved full name is {value}."
+
+    def _intake_display_from_value(self, value):
+        intake = self.catalogue.intake_for_start_date(value)
+        return intake["display_date"] if intake else _display_date(value)
+
+    @staticmethod
+    def _field_guidance(field, kind):
+        format_guidance = {
+            "full_name": (
+                "Enter your full name as shown on your official identification. "
+                "Spaces, hyphens and apostrophes are accepted."
+            ),
+            "mobile_number": (
+                "Enter an 8-digit Singapore mobile number starting with 8 or 9. "
+                "Spaces, hyphens and an optional +65 are accepted."
+            ),
+            "email": "Enter a complete email address, for example name@example.com.",
+            "date_of_birth": (
+                "You can enter your date of birth in common formats such as "
+                "20/04/2000, 2000-04-20, 20 April 2000, or April 20th, 2000. "
+                "I will normalize it before showing the summary."
+            ),
+            "nric": (
+                "Enter the complete NRIC/FIN: one starting letter, seven digits, "
+                "and the final letter. It will be masked after validation."
+            ),
+        }
+        why_guidance = {
+            "full_name": "Your full name is needed for the official enrollment record.",
+            "mobile_number": "Your mobile number is a required enrollment contact detail.",
+            "email": "Your email address is a required enrollment contact detail.",
+            "date_of_birth": (
+                "Your date of birth is required to validate the enrollment age and "
+                "prepare the official record."
+            ),
+            "nric": (
+                "Your NRIC/FIN is collected only at the final particulars stage for "
+                "official registration and invoice preparation, and it is masked in chat."
+            ),
+        }
+        return (why_guidance if kind == "why" else format_guidance)[field]
+
+    def intake_prompt_for_ids(self, option_ids, course_value):
+        choices = [
+            self.catalogue.intake_for_id(intake_id) for intake_id in option_ids
+        ]
+        choices = [item for item in choices if item is not None]
+        course = self.catalogue.course_for(course_value)
+        lines = [
+            "I’ve saved the details you provided.",
+            "",
+            f"Please choose the exact intake for {(course or {}).get('name', 'the course')}:",
+            "",
+        ]
+        lines.extend(
+            f"{index}. {item['display_date']} — {item['intake_type']}"
+            for index, item in enumerate(choices, start=1)
+        )
+        lines.extend(["", "Reply with the intake number or dates you prefer."])
+        return "\n".join(lines)
+
+    def keep_current_correction_value(self, conversation, draft):
+        field = self.pending_correction_field(conversation)
+        conversation.pending_followup = None
+        draft.pending_corrections = []
+        if field:
+            errors = dict(draft.validation_errors or {})
+            errors.pop(field, None)
+            draft.validation_errors = errors
+        missing = self.missing_fields(draft, self.catalogue)
+        if not missing and not draft.validation_errors:
+            draft.status = "awaiting_confirmation"
+            self._set_validation_state(draft, "valid", [])
+            return "No problem — I kept your current details.\n\n" + self._confirmation_summary(draft)
+        draft.status = "collecting"
+        return "No problem — I kept your current details.\n\n" + self.progress_reply(draft)
+
+    def begin_from_confirmed_interest(self, conversation, course_value, intake_id=None):
+        """Create the enrollment draft only after the participant accepts an offer.
+
+        Course and intake values come from choices previously rendered from the
+        approved catalogue. No identity value is accepted through this transition.
+        """
+        course = self.catalogue.course_for(course_value)
+        if course is None:
+            raise ValueError("The selected course is no longer available.")
+        draft = self.repository.get_or_create_draft(conversation)
+        rows = ordered_courses(draft)
+        target = next((row for row in rows if row.course_id == course["id"]), None)
+        if target is None:
+            if rows:
+                raise ValueError(
+                    "The selected course conflicts with the enrollment already in progress."
+                )
+            target, _ = add_course(draft, course, self.catalogue)
+        if intake_id:
+            intake = self.catalogue.intake_for_id(intake_id)
+            if intake is None or intake.get("course_id") != course["id"]:
+                raise ValueError("The selected intake is no longer available.")
+            if target.intake_id and target.intake_id != intake_id:
+                raise ValueError(
+                    "The selected intake conflicts with the enrollment already in progress."
+                )
+            if not target.intake_id:
+                save_course_intake(target, intake, self.catalogue)
+        draft.status = "collecting"
+        draft.confirmed_at = None
+        self._set_validation_state(draft, "incomplete", [])
+        sync_registration(draft)
+        db.session.flush()
+        return draft
+
+    def continuation_reply(self, draft):
+        """Continue a saved lead/draft naturally at its next missing field."""
+        name = _first_name(draft.full_name)
+        opening = f"Great, {name}." if name else "Great."
+        course = f" for the {draft.course}" if draft.course else ""
+        return (
+            f"{opening} I can help you continue your enrollment{course}. "
+            f"{self.next_step_prompt(draft)}"
+        )
 
     def progress_reply(self, draft):
         """Render authoritative enrollment progress without calling an LLM."""
@@ -367,10 +684,9 @@ class EnrollmentService:
             sections.append(self._intake_selection_reply(draft))
 
         if missing:
-            sections.append(
-                "You may send the remaining information together or one item at a time."
-            )
-        sections.append(self._status_wording(draft))
+            sections.append(self.next_step_prompt(draft))
+        else:
+            sections.append(self._status_wording(draft))
         return "\n\n".join(sections)
 
     def is_contextual_stage_reply(self, draft, message, last_assistant_message):
@@ -514,7 +830,9 @@ class EnrollmentService:
         ]
         return bool(conversation.pending_intake_options)
 
-    def handle_pending_intake_selection(self, conversation, message):
+    def handle_pending_intake_selection(
+        self, conversation, message, *, enforce_pending_stage=False
+    ):
         """Resolve a clear choice against only the stored displayed intake list."""
         draft = conversation.enrollment_draft
         target = (
@@ -536,7 +854,10 @@ class EnrollmentService:
             not (waiting or changing)
             or conversation.pending_action is not None
             or not conversation.pending_intake_options
-            or not _looks_like_pending_intake_selection(message)
+            or (
+                not (enforce_pending_stage and waiting)
+                and not _looks_like_pending_intake_selection(message)
+            )
         ):
             return None
         if draft is None or target is None:
@@ -910,20 +1231,8 @@ class EnrollmentService:
                 self._intake_selection_reply(draft),
             )
         if any(field in IDENTITY_FIELDS for field in missing):
-            missing_identity = [field for field in missing if field in IDENTITY_FIELDS]
             if set(saved).issubset({"course", "preferred_intake_date"}):
-                reply = self._prepend_saved(
-                    saved,
-                    self.catalogue.enrollment_reply(
-                        "participant_details",
-                        intake_notice=(
-                            self.catalogue.no_intakes_message + "\n\n"
-                            if not self.catalogue.has_intake_dates
-                            else ""
-                        ),
-                        missing_template=self._initial_enrollment_template(draft),
-                    ),
-                )
+                reply = self._prepend_saved(saved, self.next_step_prompt(draft))
                 if (
                     "preferred_intake_date" in saved
                     and next_course_without_intake(draft) is None
@@ -931,16 +1240,8 @@ class EnrollmentService:
                     return "📚 Enrollment Started\n\n" + reply
                 return reply
             if saved:
-                return self._outcome_reply(draft, saved, [])
-            return self.catalogue.enrollment_reply(
-                "participant_details",
-                intake_notice=(
-                    self.catalogue.no_intakes_message + "\n\n"
-                    if not self.catalogue.has_intake_dates
-                    else ""
-                ),
-                missing_template=self._participant_template(missing_identity),
-            )
+                return self._prepend_saved(saved, self.next_step_prompt(draft))
+            return self.next_step_prompt(draft)
         return self._prepend_saved(saved, self._confirmation_summary(draft))
 
     def _outcome_reply(self, draft, saved, invalid):
@@ -970,32 +1271,26 @@ class EnrollmentService:
         missing = self.missing_fields(draft, self.catalogue)
         invalid_fields = {field for field, _ in invalid}
         still_required = [field for field in missing if field not in invalid_fields]
-        if still_required:
-            missing_items = "\n".join(
-                f"- {self.catalogue.enrollment_field_label(field)}"
-                for field in still_required
-            )
-            sections.append(
-                self.catalogue.enrollment_reply(
-                    "outcome_missing", missing_items=missing_items
-                )
-            )
-        if "preferred_intake_date" in still_required and self.catalogue.has_intake_dates:
-            sections.append(self._intake_selection_reply(draft))
-
-        if len(invalid) == 1 and invalid[0][0] == "nric":
+        if (
+            len(invalid) == 1
+            and invalid[0][0] == "nric"
+            and missing
+            and missing[0] == "nric"
+        ):
             closing = self.catalogue.enrollment_reply("correct_nric_only")
-        elif invalid and "preferred_intake_date" in still_required:
-            closing = self.catalogue.enrollment_reply("correct_and_choose_intake")
         elif invalid:
-            closing = self.catalogue.enrollment_reply("correct_fields")
-        elif still_required and all(field in IDENTITY_FIELDS for field in still_required):
-            closing = self.catalogue.enrollment_reply(
-                "continue_participant_details",
-                missing_template=self._participant_template(still_required),
+            first_invalid = invalid[0][0]
+            closing = (
+                self._intake_selection_reply(draft)
+                if first_invalid == "preferred_intake_date"
+                else self.next_step_prompt(draft)
             )
         elif still_required:
-            closing = self.next_step_prompt(draft)
+            closing = (
+                self._intake_selection_reply(draft)
+                if still_required[0] == "preferred_intake_date"
+                else self.next_step_prompt(draft)
+            )
         else:
             closing = self._confirmation_summary(draft)
             draft.status = "awaiting_confirmation"
@@ -1282,12 +1577,24 @@ class EnrollmentService:
                 return {"preferred_intake_date": stripped}
         missing = self.missing_fields(draft, self.catalogue)
         expected = missing[0] if missing else None
+        # Once an intake has been selected, an unmistakable identity value is
+        # safe to accept out of order. This is especially useful for DOB because
+        # phones, emails and NRIC/FIN values are already recognised structurally.
+        if (
+            "date_of_birth" in missing
+            and draft.preferred_intake_date is not None
+        ):
+            unwrapped_dob = _unwrap_stage_answer("date_of_birth", stripped)
+            if _looks_like_bare_field_value("date_of_birth", unwrapped_dob):
+                return {"date_of_birth": unwrapped_dob}
         if (
             expected in IDENTITY_FIELDS
             and _assistant_requested_field(last_assistant_message, expected)
-            and _looks_like_bare_field_value(expected, stripped)
+            and _looks_like_bare_field_value(
+                expected, _unwrap_stage_answer(expected, stripped)
+            )
         ):
-            return {expected: stripped}
+            return {expected: _unwrap_stage_answer(expected, stripped)}
         return {}
 
     def _newly_supplied_fields(self, draft, message, extracted_fields):
@@ -1365,6 +1672,10 @@ class EnrollmentService:
                 re.fullmatch(r"\s*\d+\s*", message)
                 or re.search(r"(?i)\b(?:intake|course\s+date|choose|select)\b", message)
             ):
+                return True
+            if field == "date_of_birth" and _looks_like_bare_field_value(
+                field, value_text
+            ) and value_text in lowered:
                 return True
             return bool(
                 re.search(
@@ -1508,54 +1819,74 @@ class EnrollmentService:
 
     def _duplicate_enrollment_error(self, draft):
         courses = ordered_courses(draft)
-        if not draft.nric or not courses:
+        # A phone number or NRIC/FIN may legitimately be shared/reused (for
+        # example, a family contact number or a returning participant). Neither
+        # field is a unique enrollment key by itself. Only the combined identity
+        # plus the same course and intake is treated as a duplicate.
+        if not courses or not draft.nric or not draft.mobile_number:
             return None
-        duplicate = (
-            db.session.query(EnrollmentCourse.id)
-            .join(EnrollmentDraft, EnrollmentDraft.id == EnrollmentCourse.enrollment_id)
-            .filter(
-                EnrollmentCourse.enrollment_id != draft.id,
-                EnrollmentDraft.nric == draft.nric,
-                EnrollmentCourse.course_id.in_([row.course_id for row in courses]),
-                EnrollmentCourse.status.in_(
-                    (
-                        "awaiting_confirmation",
-                        "confirmed",
-                        "enrolled",
-                        "invoice_sent",
-                        "awaiting_payment",
-                        "paid",
-                        "receipt_issued",
-                        "completed",
-                    )
-                ),
-            )
-            .first()
+        active_statuses = (
+            "awaiting_confirmation",
+            "confirmed",
+            "enrolled",
+            "invoice_sent",
+            "awaiting_payment",
+            "paid",
+            "receipt_issued",
+            "completed",
         )
+        course_intakes = [
+            and_(
+                EnrollmentCourse.course_id == row.course_id,
+                EnrollmentCourse.intake_id == row.intake_id,
+            )
+            for row in courses
+            if row.intake_id
+        ]
+        duplicate = None
+        if course_intakes:
+            duplicate = (
+                db.session.query(EnrollmentCourse.id)
+                .join(
+                    EnrollmentDraft,
+                    EnrollmentDraft.id == EnrollmentCourse.enrollment_id,
+                )
+                .filter(
+                    EnrollmentCourse.enrollment_id != draft.id,
+                    EnrollmentDraft.conversation_id != draft.conversation_id,
+                    EnrollmentDraft.nric == draft.nric,
+                    EnrollmentDraft.mobile_number == draft.mobile_number,
+                    EnrollmentDraft.status.in_(active_statuses),
+                    EnrollmentCourse.status.notin_(
+                        {"cancelled", "retired_unavailable"}
+                    ),
+                    or_(*course_intakes),
+                )
+                .first()
+            )
         if duplicate is None:
             duplicate = EnrollmentDraft.query.filter(
                 EnrollmentDraft.id != draft.id,
                 EnrollmentDraft.nric == draft.nric,
-                EnrollmentDraft.course_id.in_([row.course_id for row in courses]),
-                EnrollmentDraft.status.in_(
-                    (
-                        "awaiting_confirmation",
-                        "confirmed",
-                        "enrolled",
-                        "invoice_sent",
-                        "awaiting_payment",
-                        "paid",
-                        "receipt_issued",
-                        "completed",
-                    )
+                EnrollmentDraft.mobile_number == draft.mobile_number,
+                or_(
+                    *[
+                        and_(
+                            EnrollmentDraft.course_id == row.course_id,
+                            EnrollmentDraft.intake_id == row.intake_id,
+                        )
+                        for row in courses
+                        if row.intake_id
+                    ]
                 ),
-            ).first()
+                EnrollmentDraft.status.in_(active_statuses),
+            ).first() if course_intakes else None
         if duplicate is None:
             return None
         return (
-            "It looks like an active enrolment already exists for this participant. "
-            "I have not created another enrollment. Please choose a different course "
-            "or ask staff to review the existing registration."
+            "It looks like an active enrolment with the same NRIC/FIN, mobile number, "
+            "course and intake already exists. I have not created an exact duplicate. "
+            "Please reopen the existing enrollment or ask staff to review it."
         )
 
     @staticmethod
@@ -1751,6 +2082,13 @@ def _looks_like_course_question(message):
 def _looks_like_pending_intake_selection(message):
     normalized = " ".join(str(message or "").casefold().split())
     if re.search(
+        r"\b(?:not sure|unsure|don t know|do not know|can t decide|cannot decide|"
+        r"need time|decide later|continue later|ask something else)\b",
+        normalized,
+    ):
+        # Hesitation is conversation, not evidence selecting an intake record.
+        return False
+    if re.search(
         r"\b(?:full name|name is|nric|fin|date of birth|dob|born|email|"
         r"mobile|phone|contact number)\b",
         normalized,
@@ -1789,9 +2127,8 @@ def _looks_like_pending_intake_selection(message):
 def _looks_like_intake_change(message):
     """Recognise a contextual change to one of the displayed intake choices."""
     normalized = " ".join(str(message or "").casefold().split())
-    change_cue = any(
-        cue in normalized
-        for cue in ("actually", "change", "switch", "instead", "use", "prefer")
+    change_cue = bool(
+        re.search(r"\b(?:actually|change|switch|instead|use|prefer)\b", normalized)
     )
     choice_cue = bool(
         re.search(
@@ -1874,13 +2211,147 @@ def _looks_like_bare_field_value(field, value):
                 r"june|july|august|september|october|november|december)\b",
                 lowered,
             )
-            or re.fullmatch(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", normalized)
+            or re.fullmatch(r"\d{1,2}[./-]\d{1,2}[./-]\d{2,4}", normalized)
+            or re.fullmatch(r"\d{1,2}\s+\d{1,2}\s+\d{2,4}", normalized)
+            or re.fullmatch(r"\d{6}|\d{8}", normalized)
+            or bool(
+                re.search(
+                    r"\b(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b",
+                    lowered,
+                )
+            )
         )
     if field == "email":
         return bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", normalized))
     if field == "mobile_number":
         return bool(re.fullmatch(r"(?:\+?65[ -]?)?[689]\d{7}", normalized))
     return False
+
+
+def _requested_draft_correction_field(message):
+    text = " ".join(str(message or "").casefold().split())
+    if not re.search(
+        r"\b(?:change|correct|update|replace|edit|fix)\b", text
+    ):
+        return None
+    fields = (
+        ("mobile_number", r"\b(?:mobile|phone|handphone|contact)\s*(?:number)?\b"),
+        ("email", r"\be-?mail(?:\s+address)?\b"),
+        ("date_of_birth", r"\b(?:date\s+of\s+birth|birth\s*date|birthday|bday|d\.?o\.?b\.?)\b"),
+        ("nric", r"\b(?:nric|fin)(?:\s+number)?\b"),
+        ("full_name", r"\b(?:full\s+name|name)\b"),
+    )
+    for field, pattern in fields:
+        if re.search(pattern, text):
+            return field
+    return None
+
+
+def _message_contains_replacement(field, message):
+    parsed = parse_enrollment_fields(message)
+    if field in parsed and _looks_like_bare_field_value(field, parsed[field]):
+        return True
+    patterns = {
+        "mobile_number": r"(?<!\d)(?:(?:\+?65)[\s-]?)?[89]\d{3}[\s-]?\d{4}(?!\d)",
+        "email": r"\b[^\s,;:@]+@[^\s,;:@]+\.[A-Za-z]{2,}\b",
+        "nric": r"\b[STFGM]\s*\d(?:\s*\d){6}\s*[A-Z]\b",
+    }
+    return bool(re.search(patterns[field], str(message or ""), re.I)) if field in patterns else False
+
+
+def _unwrap_stage_answer(field, value):
+    """Remove harmless conversational wrappers from a prompted field answer."""
+    text = " ".join(str(value or "").strip().split()).strip(" .")
+    common = r"(?:it\s+is|it'?s|mine\s+is|here(?:'s|\s+is)|sure|okay|ok)"
+    text = re.sub(rf"(?i)^\s*{common}\s*[:,-]?\s*", "", text).strip()
+    prefixes = {
+        "full_name": r"(?i)^(?:my\s+name\s+is|i\s+am|i'?m|call\s+me)\s+",
+        "mobile_number": r"(?i)^(?:my\s+)?(?:mobile|phone|number)(?:\s+number)?\s*(?:is|:)\s*",
+        "email": r"(?i)^(?:my\s+)?e-?mail(?:\s+address)?\s*(?:is|:)\s*",
+        "date_of_birth": r"(?i)^(?:my\s+)?(?:date\s+of\s+birth|birthday|dob)\s*(?:is|:)\s*",
+        "nric": r"(?i)^(?:my\s+)?(?:nric|fin)(?:\s+number)?\s*(?:is|:)\s*",
+    }
+    return re.sub(prefixes.get(field, r"$^"), "", text).strip(" .")
+
+
+_DRAFT_FIELD_PATTERNS = {
+    "full_name": r"\b(?:full\s+name|name)\b",
+    "mobile_number": r"\b(?:mobile|phone|handphone|contact)(?:\s+number)?\b|\bnumber\b",
+    "email": r"\be-?mail(?:\s+address)?\b",
+    "date_of_birth": r"\b(?:date\s+of\s+birth|birth\s*date|birthday|bday|d\.?o\.?b\.?)\b",
+    "nric": r"\b(?:nric|fin)(?:\s+number)?\b",
+    "preferred_intake_date": r"\b(?:selected\s+)?(?:intake|course\s+date)\b",
+    "course": r"\b(?:selected\s+)?(?:course|programme)\b",
+}
+
+
+def _mentioned_draft_field(message):
+    text = str(message or "").casefold()
+    for field, pattern in _DRAFT_FIELD_PATTERNS.items():
+        if re.search(pattern, text):
+            return field
+    return None
+
+
+def _draft_detail_lookup(message):
+    text = " ".join(str(message or "").casefold().split())
+    all_details = bool(
+        re.search(
+            r"\b(?:show|list|repeat|tell|remind)\s+(?:me\s+)?(?:what\s+)?"
+            r"(?:details|information|info|particulars)\b",
+            text,
+        )
+        or re.search(
+            r"\bwhat\s+(?:details|information|info|particulars)\s+"
+            r"(?:do\s+you\s+have|have\s+i\s+(?:given|provided)|did\s+i\s+(?:give|provide))\b",
+            text,
+        )
+    )
+    if all_details:
+        return "all"
+    memory_cue = bool(
+        re.search(
+            r"\b(?:did\s+i\s+(?:give|provide|enter|type|send|use)|"
+            r"have\s+i\s+(?:already\s+)?(?:given|provided|entered|sent)|"
+            r"do\s+you\s+have|did\s+you\s+save|you\s+saved|"
+            r"is\s+(?:already\s+)?saved|on\s+(?:file|record)|"
+            r"what\s+(?:is|was)\s+my|which\s+.+\s+did\s+i|"
+            r"what\s+.+\s+did\s+i|repeat\s+my|remind\s+me\s+(?:of|what))\b",
+            text,
+        )
+        or re.search(
+            r"\b(?:is|was|has|have)\b.{0,50}\b(?:changed|updated|corrected)\b|"
+            r"\bdid\s+you\s+(?:change|update|correct)\b",
+            text,
+        )
+    )
+    if not memory_cue:
+        return None
+    return _mentioned_draft_field(text)
+
+
+def _field_guidance_request(message, expected_field=None):
+    text = " ".join(str(message or "").casefold().split())
+    field = _mentioned_draft_field(text)
+    why = bool(
+        re.search(r"\bwhy\b", text)
+        and re.search(r"\b(?:need|want|ask|collect|required|provide|give)\b", text)
+    )
+    format_question = bool(
+        re.search(
+            r"\b(?:what|which)\b[^?]{0,50}\bformat\b|"
+            r"\bhow\b[^?]{0,50}\bformat\b|"
+            r"\bhow\s+(?:do|should|can)\s+i\s+(?:enter|type|write|send|give)\b|"
+            r"\bwhat\s+should\s+i\s+(?:enter|type|write|send|give)\b|"
+            r"\bcan\s+i\s+(?:enter|type|write)\b",
+            text,
+        )
+    )
+    if not (why or format_question):
+        return None, None
+    if field not in IDENTITY_FIELDS:
+        field = expected_field if expected_field in IDENTITY_FIELDS else None
+    return field, "why" if why else "format"
 
 
 def _mask_email(value):

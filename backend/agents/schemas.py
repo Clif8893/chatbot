@@ -6,7 +6,18 @@ from pydantic import BaseModel, Field
 
 
 class IntentClassification(BaseModel):
-    intent: Literal["faq", "enrollment", "unclear"]
+    intent: Literal[
+        "faq",
+        "enrollment",
+        "enrollment_interest",
+        "workflow_question",
+        "pause_workflow",
+        "resume_workflow",
+        "course_comparison",
+        "small_talk",
+        "unsupported_general_question",
+        "unclear",
+    ]
     confidence: float = Field(ge=0, le=1)
     short_reason: str = Field(min_length=1, max_length=500)
 

@@ -57,7 +57,7 @@ def dated_catalogue(tmp_path):
     return CourseCatalogue(path)
 
 
-def test_partial_submission_lists_all_remaining_fields(client, conversation_id):
+def test_partial_submission_asks_only_the_next_remaining_field(client, conversation_id):
     first = send(
         client, conversation_id, "I want to enroll in Dental Assisting"
     ).get_json()
@@ -68,10 +68,10 @@ def test_partial_submission_lists_all_remaining_fields(client, conversation_id):
     assert "S$600 nett" in first["message"]["content"]
     reply = second["message"]["content"]
     assert "Saved successfully" in reply
-    assert "Still needed" in reply
-    assert "NRIC/FIN" in reply
-    assert "Date of birth" in reply
-    assert "Email address" in reply
+    assert "May I have your 8-digit Singapore mobile number?" in reply
+    assert "invoice preparation" not in reply
+    assert "Date of birth" not in reply
+    assert "Email address" not in reply
     assert "Payment method" not in reply
     assert "Full name as shown on NRIC: Test Student" in reply
 
@@ -196,8 +196,8 @@ def test_partial_details_are_saved_then_completed_without_repetition(
         f"Email: {SYNTHETIC_EMAIL}",
     ).get_json()
     partial_reply = partial["message"]["content"]
-    assert "Date of birth" in partial_reply
-    assert "Mobile number" in partial_reply
+    assert "8-digit Singapore mobile number" in partial_reply
+    assert "Date of birth" not in partial_reply
     assert "Payment method" not in partial_reply
     assert "Full name as shown on NRIC: Test Student" in partial_reply
     assert SYNTHETIC_NRIC not in partial_reply
@@ -324,12 +324,14 @@ def test_faq_interruption_preserves_and_resumes_enrollment(client, conversation_
     faq = send(client, conversation_id, "What is the course fee?").get_json()
     assert faq["routing"]["intent"] == "faq"
     assert (
-        "continue with your remaining enrollment details"
+        "continue where you left off"
         in faq["message"]["content"].casefold()
     )
-    resumed = send(client, conversation_id, f"My NRIC is {SYNTHETIC_NRIC}").get_json()
+    resumed = send(
+        client, conversation_id, f"My mobile number is {SYNTHETIC_MOBILE}"
+    ).get_json()
     assert resumed["routing"]["intent"] == "enrollment"
-    assert "date of birth" in resumed["message"]["content"].casefold()
+    assert "email address" in resumed["message"]["content"].casefold()
 
 
 @pytest.mark.parametrize(

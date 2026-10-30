@@ -215,7 +215,7 @@ def test_enrollment_progress_survives_application_restart(tmp_path, fake_ai):
     ).get_json()
     assert "NRIC/FIN: S*******D" in resumed["message"]["content"]
     assert "Full name as shown" not in resumed["message"]["content"]
-    assert "date of birth" in resumed["message"]["content"].casefold()
+    assert "8-digit singapore mobile number" in resumed["message"]["content"].casefold()
 
 
 def test_nric_is_masked_in_history_agent_context_and_logs(

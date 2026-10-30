@@ -43,7 +43,7 @@ export default function ParticipantPanel({ conversationId, revision, onUpdated }
     } catch (requestError) {
       setError(
         requestError.status === 401
-          ? "Your session has expired. Please sign in again to download your invoice."
+          ? "Your chat session has expired. Refresh the page and enter your name again."
           : requestError.message,
       );
     } finally {
@@ -76,7 +76,7 @@ export default function ParticipantPanel({ conversationId, revision, onUpdated }
     } catch (requestError) {
       setError(
         requestError.status === 401
-          ? "Your session has expired. Please sign in again to resend your invoice."
+          ? "Your chat session has expired. Refresh the page and enter your name again."
           : requestError.message,
       );
     } finally {

@@ -10,6 +10,13 @@ from backend.services.enrollment.enrollment_service import (
     EnrollmentService,
     POST_CONFIRMATION_ADD_COURSE_FOLLOWUP,
 )
+from backend.services.enrollment.enrollment_management_service import (
+    is_invoice_resend_request,
+    is_participant_fee_query,
+    is_participant_training_query,
+    is_status_query,
+)
+from backend.services.enrollment.enrollment_parser import parse_enrollment_fields
 from backend.services.enrollment.registration_group_service import (
     display_range as display_course_range,
     ordered_courses,
@@ -22,10 +29,22 @@ from backend.models.operations import AuditEvent
 
 
 UNCLEAR_REPLY = (
-    "Hi! 👋 Would you like to learn more about the course, or would you like to enrol?"
+    "I didn’t quite understand that. You can ask me about the courses or tell me "
+    "what you would like to do with your enrollment."
+)
+SMALL_TALK_REPLY = (
+    "I’m here and happy to help. You can ask naturally about the courses, fees, "
+    "dates or enrollment whenever you’re ready."
+)
+UNSUPPORTED_GENERAL_REPLY = (
+    "I can help with Q&M course information and enrollment, but I’m not able to "
+    "answer unrelated general questions. You’re welcome to ask about a course in "
+    "your own words."
 )
 ENROLLMENT_OFFER_FOLLOWUP = "enrollment_offer"
 ENROLLMENT_CONFIRMATION_FOLLOWUP = "enrollment_confirmation"
+INTAKE_INTEREST_FOLLOWUP = "intake_interest"
+INTEREST_CONTEXT_KEY = "enrollment_interest_context"
 # Web chat buttons. For those whose answer depends on the course, the FAQ topics
 # to answer and the question asked when the conversation has no course yet.
 QUICK_ACTION_TOPICS = {
@@ -124,7 +143,21 @@ class ChatService:
         )
 
         draft = conversation.enrollment_draft
-        if self.enrollment_management is not None:
+        # Only an already-open transaction or an exact read-only operation owns the
+        # message before semantic routing. New broad requests are classified first.
+        management_first = bool(
+            conversation.pending_action is not None
+            or is_status_query(user_text)
+            or is_participant_training_query(user_text)
+            or is_participant_fee_query(user_text)
+            or is_invoice_resend_request(user_text)
+            or re.fullmatch(
+                r"\s*confirm\s+(?:cancellation|change|resend|reschedule)\s*[.!]?\s*",
+                str(user_text or ""),
+                re.IGNORECASE,
+            )
+        )
+        if self.enrollment_management is not None and management_first:
             management = self.enrollment_management.handle(conversation, user_text)
             if management is not None:
                 if management.action in {"draft_discarded", "draft_already_discarded"}:
@@ -138,6 +171,7 @@ class ChatService:
                     management.reply,
                     intent="enrollment",
                     agent_name="enrollment_agent",
+                    rule=management.action,
                 )
 
         retired_reply = self.enrollment.redirect_retired_draft(conversation, draft)
@@ -150,27 +184,31 @@ class ChatService:
                 retired_reply,
                 intent="enrollment",
                 agent_name="enrollment_agent",
+                rule="retired_course_redirect",
             )
 
         choice_key = _pending_course_choice(conversation.pending_followup)
         if choice_key:
             # Reply to "Which course would you like ...?" after a button or menu choice.
-            conversation.pending_followup = None
             topics = self._course_choice_topics(choice_key, course_history)
             picked = self.catalogue.picked_course(user_text)
             # "2" or "the front desk one" answers the button's question; a new
             # question naming a course ("job opportunities for front desk?") is
             # handled normally for that course instead.
             if topics and picked is not None and self.catalogue.is_bare_course_choice(user_text):
+                conversation.pending_followup = None
                 reply = self.catalogue.approved_faq_reply(
                     topics, course=None if picked == "both" else picked
                 )
                 if choice_key.startswith("menu"):
-                    reply += "\n\nReply with another number from the menu, or type your question."
+                    reply += (
+                        "\n\nYou can choose another menu number, or ask in your own words."
+                    )
                     conversation.pending_followup = WELCOME_MENU_FOLLOWUP
                 return self._direct_reply(
                     conversation, user_message, draft, reply,
                     intent="faq", agent_name="faq_agent",
+                    rule="pending_faq_course_choice",
                 )
             if (
                 topics
@@ -184,6 +222,7 @@ class ChatService:
                     conversation, user_message, draft,
                     self.catalogue.course_choice_prompt("Which course would you like? Both courses are dental courses."),
                     intent="faq", agent_name="faq_agent",
+                    rule="ambiguous_faq_course_choice",
                 )
 
         if quick_action in QUICK_ACTION_TOPICS:
@@ -202,6 +241,7 @@ class ChatService:
             return self._direct_reply(
                 conversation, user_message, draft, reply,
                 intent="faq", agent_name="faq_agent",
+                rule="quick_action",
             )
 
         context_course = self._conversation_course(course_history)
@@ -211,6 +251,7 @@ class ChatService:
             first_contact=first_contact and draft is None,
             greeting=_greeting_salutation(user_text),
             context_course=context_course,
+            allow_welcome=False,
         )
         if conversation.pending_followup == WELCOME_MENU_FOLLOWUP and (
             lead_routing is None or lead_routing.rewrite
@@ -230,6 +271,378 @@ class ChatService:
                 lead_routing.reply,
                 intent=lead_routing.intent,
                 agent_name=lead_routing.agent_name,
+                rule="lead_command_or_optional_menu",
+            )
+
+        pending_correction = self.enrollment.pending_correction_field(conversation)
+        if pending_correction is not None and _is_conversational_clarification(user_text):
+            correction_label = self.catalogue.enrollment_field_label(
+                pending_correction
+            ).casefold()
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                (
+                    f"You asked to change your {correction_label}. "
+                    + self.enrollment.correction_prompt(draft, pending_correction)
+                ),
+                intent="workflow_question",
+                agent_name="enrollment_agent",
+                rule="pending_correction_clarification",
+            )
+        if pending_correction is not None and _keeps_current_detail(user_text):
+            reply = self.enrollment.keep_current_correction_value(
+                conversation, draft
+            )
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="enrollment",
+                agent_name="enrollment_agent",
+                rule="pending_correction_kept",
+            )
+
+        draft_question = self.enrollment.draft_question_reply(
+            conversation, draft, user_text
+        )
+        if draft_question is not None:
+            question_kind, reply = draft_question
+            rules = {
+                "detail": "saved_enrollment_detail_lookup",
+                "details": "saved_enrollment_details_lookup",
+                "guidance": "enrollment_field_guidance",
+            }
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="workflow_question",
+                agent_name="enrollment_agent",
+                rule=rules[question_kind],
+            )
+
+        # Exact answers to displayed choices remain deterministic and are resolved
+        # only against the option ids stored for this conversation. Questions,
+        # hesitation and unrelated messages return None and continue to CrewAI.
+        pending_course = self.enrollment.handle_pending_course_selection(
+            conversation, user_text
+        )
+        if pending_course is not None:
+            reply, draft = pending_course
+            conversation.active_intent = "enrollment"
+            self.enrollment.remember_intake_choices(conversation, draft)
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="enrollment",
+                agent_name="enrollment_agent",
+                rule="displayed_course_selection",
+            )
+        pending_intake = self.enrollment.handle_pending_intake_selection(
+            conversation, user_text
+        )
+        if pending_intake is not None:
+            reply, draft = pending_intake
+            conversation.active_intent = "enrollment"
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="enrollment",
+                agent_name="enrollment_agent",
+                rule="displayed_intake_selection",
+            )
+
+        # Invoice reads/resend requests are explicit deterministic operations. They
+        # never need a language model to select an enrollment or document record.
+        invoice_email_request = _invoice_email_request_kind(user_text)
+        if invoice_email_request:
+            if self.enrollment_resolver is not None:
+                invoice_context = self.enrollment_resolver.resolve(conversation, user_text)
+                if invoice_context.ambiguous:
+                    return self._direct_reply(
+                        conversation, user_message, None,
+                        self.enrollment_resolver.clarification_reply(invoice_context),
+                        intent="enrollment", agent_name="enrollment_agent",
+                        rule="invoice_enrollment_clarification",
+                    )
+                draft = invoice_context.enrollment
+            conversation.active_intent = "enrollment"
+            reply = self._invoice_email_reply(draft, invoice_email_request)
+            result = self._direct_reply(
+                conversation, user_message, draft, reply,
+                intent="enrollment", agent_name="enrollment_agent",
+                rule=f"invoice_email_{invoice_email_request}",
+            )
+            result["show_invoice_action"] = True
+            if draft is not None and self.invoice_email_service is not None:
+                result["invoice_email"] = self.invoice_email_service.serialize(draft)
+            return result
+
+        if _is_invoice_request(user_text):
+            if self.enrollment_resolver is not None:
+                invoice_context = self.enrollment_resolver.resolve(conversation, user_text)
+                if invoice_context.ambiguous:
+                    return self._direct_reply(
+                        conversation, user_message, None,
+                        self.enrollment_resolver.clarification_reply(invoice_context),
+                        intent="enrollment", agent_name="enrollment_agent",
+                        rule="invoice_enrollment_clarification",
+                    )
+                draft = invoice_context.enrollment
+            conversation.active_intent = "enrollment"
+            result = self._direct_reply(
+                conversation, user_message, draft, self._invoice_status_reply(draft),
+                intent="enrollment", agent_name="enrollment_agent",
+                rule="invoice_download_status",
+            )
+            result["show_invoice_action"] = True
+            return result
+
+        enrollment_message = user_text
+        pending_followup_before_decision = conversation.pending_followup
+        staged_interest_before_decision = self._staged_interest(conversation)
+        implicit_interest_option_ids = list(
+            (staged_interest_before_decision or {}).get("intake_option_ids") or []
+        )
+        supplied_offer_fields = parse_enrollment_fields(user_text)
+        implicit_offer_acceptance = bool(
+            staged_interest_before_decision
+            and pending_followup_before_decision
+            in {ENROLLMENT_OFFER_FOLLOWUP, INTAKE_INTEREST_FOLLOWUP}
+            and any(
+                field in supplied_offer_fields
+                for field in ("full_name", "mobile_number", "email", "date_of_birth", "nric")
+            )
+        )
+        if implicit_offer_acceptance:
+            draft = self.enrollment.begin_from_confirmed_interest(
+                conversation,
+                staged_interest_before_decision["course_id"],
+                staged_interest_before_decision.get("intake_id"),
+            )
+            self.lead.mark_interested(conversation)
+            self._clear_staged_interest(conversation)
+        contextual_decision = _contextual_decision(
+            user_text, pending_followup_before_decision
+        )
+        course_choices, duplicate_course_choice = self.catalogue.match_course_selection(
+            user_text
+        )
+        classification_handler = "crewai"
+        classification_rule = "semantic_intent_classification"
+        if implicit_offer_acceptance:
+            classification = IntentClassification(
+                intent="enrollment",
+                confidence=1.0,
+                short_reason=(
+                    "Participant supplied enrollment details in response to the "
+                    "enrollment invitation."
+                ),
+            )
+            classification_handler = "deterministic"
+            classification_rule = "implicit_enrollment_acceptance"
+        elif contextual_decision:
+            if (
+                pending_followup_before_decision == ENROLLMENT_OFFER_FOLLOWUP
+                and contextual_decision == "confirm"
+            ):
+                staged_interest = self._staged_interest(conversation)
+                if staged_interest:
+                    draft = self.enrollment.begin_from_confirmed_interest(
+                        conversation,
+                        staged_interest["course_id"],
+                        staged_interest.get("intake_id"),
+                    )
+                    self.lead.mark_interested(conversation)
+                    self._clear_staged_interest(conversation)
+            classification = IntentClassification(
+                intent="enrollment",
+                confidence=1.0,
+                short_reason="Exact response to the persisted enrollment state.",
+            )
+            classification_handler = "deterministic"
+            classification_rule = "pending_enrollment_confirmation"
+            enrollment_message = (
+                "Confirm"
+                if pending_followup_before_decision
+                == ENROLLMENT_CONFIRMATION_FOLLOWUP
+                and contextual_decision == "confirm"
+                else "not correct"
+                if pending_followup_before_decision
+                == ENROLLMENT_CONFIRMATION_FOLLOWUP
+                else "Yes, enrol me in this course"
+            )
+            conversation.pending_followup = None
+        elif (course_choices or duplicate_course_choice) and (
+            draft is not None
+            or "available courses" in str(last_assistant_message or "").casefold()
+            or any(
+                term in user_text.casefold()
+                for term in ("enrol", "enroll", "register", "sign up")
+            )
+        ):
+            classification = IntentClassification(
+                intent="enrollment",
+                confidence=1.0,
+                short_reason="Exact canonical course selection.",
+            )
+            classification_handler = "deterministic"
+            classification_rule = "canonical_course_selection"
+        elif self.enrollment.is_pending_correction_answer(conversation, user_text):
+            classification = IntentClassification(
+                intent="enrollment",
+                confidence=1.0,
+                short_reason="Value supplied for the pending enrollment correction.",
+            )
+            classification_handler = "deterministic"
+            classification_rule = "pending_correction_value"
+        else:
+            classification = self.ai_service.classify(
+                message=redact_for_classification(user_text),
+                context=self._format_context(prior_messages, redact=True),
+                active_intent=conversation.active_intent,
+                draft_status=draft.status if draft else None,
+                pending_followup=conversation.pending_followup,
+                draft_summary=self._classification_draft_summary(draft),
+            )
+        if (
+            pending_followup_before_decision == INTAKE_INTEREST_FOLLOWUP
+            and classification.intent != "enrollment_interest"
+            and _is_displayed_intake_interest_reply(user_text)
+        ):
+            staged_interest = self._staged_interest(conversation) or {}
+            staged_course = self.catalogue.course_for(
+                staged_interest.get("course_id")
+            )
+            selected_intake = None
+            if staged_course is not None:
+                selected_intake, _ = self.catalogue.match_intake_selection(
+                    user_text, staged_course["id"]
+                )
+            if (
+                selected_intake is not None
+                and selected_intake["id"]
+                in set(conversation.pending_intake_options or [])
+            ):
+                classification = IntentClassification(
+                    intent="enrollment_interest",
+                    confidence=1.0,
+                    short_reason="Exact selection from the displayed intake dates.",
+                )
+                classification_handler = "deterministic"
+                classification_rule = "displayed_intake_interest"
+        if classification.intent == "unclear" and (
+            _is_intake_question(user_text)
+            or _is_utap_question(user_text)
+            or _looks_like_question(user_text)
+        ):
+            classification.intent = "faq"
+            classification_rule = "semantic_question_fallback_to_faq"
+        user_message.detected_intent = classification.intent
+        user_message.classification_confidence = classification.confidence
+
+        if classification.intent == "enrollment_interest":
+            staged_interest = self._staged_interest(conversation) or {}
+            focus = self.catalogue.course_for(staged_interest.get("course_id"))
+            if focus is None:
+                focus = self._course_focus(user_text, course_history, draft)[0]
+            intake = None
+            if focus is not None:
+                intake, _ = self.catalogue.match_intake_selection(
+                    user_text, focus["id"]
+                )
+                displayed = set(conversation.pending_intake_options or [])
+                if intake is not None and displayed and intake["id"] not in displayed:
+                    intake = None
+            if focus is None:
+                self.enrollment.remember_course_choices(conversation)
+                return self._direct_reply(
+                    conversation,
+                    user_message,
+                    draft,
+                    self.catalogue.course_choice_prompt(
+                        "I’d be happy to help. Which course are you interested in?"
+                    ),
+                    intent="enrollment_interest",
+                    agent_name="intent_classifier",
+                    handler="crewai",
+                    routing_agent="classifier",
+                    rule="interest_needs_course",
+                    confidence=classification.confidence,
+                )
+            month_intakes = (
+                _intakes_for_mentioned_month(
+                    user_text,
+                    self.catalogue.selectable_intakes_for(focus["id"]),
+                )
+                if intake is None
+                else []
+            )
+            if len(month_intakes) > 1:
+                self._remember_month_interest_context(
+                    conversation, focus, month_intakes
+                )
+                self.lead.mark_interested(conversation)
+                choices = "\n".join(
+                    f"{index}. {item['display_date']} — {item['intake_type']}"
+                    for index, item in enumerate(month_intakes, start=1)
+                )
+                return self._direct_reply(
+                    conversation,
+                    user_message,
+                    draft,
+                    (
+                        f"Great — I found {len(month_intakes)} matching intakes for "
+                        f"the {focus['name']}:\n\n{choices}\n\nWhich one works for you?"
+                    ),
+                    intent="enrollment_interest",
+                    agent_name="intent_classifier",
+                    handler=classification_handler,
+                    routing_agent=(
+                        "classifier" if classification_handler == "crewai" else None
+                    ),
+                    rule="interest_needs_exact_intake",
+                    confidence=classification.confidence,
+                )
+            self._remember_staged_interest(conversation, focus, intake)
+            self.lead.mark_interested(conversation)
+            chosen = (
+                f"The {intake['display_date']} intake is currently available for "
+                f"the {focus['name']}."
+                if intake is not None
+                else f"I understand you’re interested in the {focus['name']}."
+            )
+            reply = (
+                f"{chosen}\n\nWould you like me to begin your enrollment"
+                + (" for this intake?" if intake is not None else "?")
+                + " I’ll ask for your name and mobile number first. Your NRIC/FIN "
+                "will only be requested later for official registration and invoice preparation."
+            )
+            return self._direct_reply(
+                conversation,
+                user_message,
+                draft,
+                reply,
+                intent="enrollment_interest",
+                agent_name="intent_classifier",
+                handler=classification_handler,
+                routing_agent=(
+                    "classifier" if classification_handler == "crewai" else None
+                ),
+                rule=(
+                    "qualified_interest_confirmation"
+                    if classification_handler == "crewai"
+                    else classification_rule
+                ),
+                confidence=classification.confidence,
             )
 
         enrol_course = (
@@ -247,6 +660,7 @@ class ChatService:
             # "I'd like to enrol" while discussing one course enrols in that course;
             # "... in the other course" enrols in the other one.
             user_text = f"{user_text.rstrip(' .!')} in the {enrol_course['name']}"
+            enrollment_message = user_text
 
         course_fact_topic = _course_fact_topic(user_text)
         enrollment_progress_request = bool(
@@ -254,7 +668,11 @@ class ChatService:
             and draft.status not in {"discarded", "cancelled"}
             and _is_enrollment_progress_request(user_text)
         )
-        if course_fact_topic and not enrollment_progress_request:
+        if (
+            classification.intent == "faq"
+            and course_fact_topic
+            and not enrollment_progress_request
+        ):
             # A question naming one course is answered for that course; "my course"
             # uses the participant's enrollment; otherwise every course is covered.
             selected_course, _ = self._course_focus(user_text, course_history, draft)
@@ -284,16 +702,17 @@ class ChatService:
                 if name and reply != self.catalogue.no_intakes_message:
                     reply = _personalise_reply(reply, name)
                 reply += (
-                    "\n\nWhen you’re ready, you can continue with your remaining "
-                    "enrollment details 😊"
+                    "\n\nWhen you’re ready, we can continue where you left off. "
+                    f"{self.enrollment.next_step_prompt(draft)}"
                 )
             elif name and reply != self.catalogue.no_intakes_message:
                 reply = _personalise_reply(reply, name)
             return self._direct_reply(
                 conversation, user_message, draft, reply,
                 intent="faq", agent_name="faq_agent",
+                rule="approved_course_fact",
             )
-        if _is_course_catalogue_request(user_text):
+        if classification.intent == "faq" and _is_course_catalogue_request(user_text):
             reply = (
                 "📚 Available Courses\n\n"
                 f"{self.catalogue.course_choices()}\n\n"
@@ -302,38 +721,13 @@ class ChatService:
             return self._direct_reply(
                 conversation, user_message, draft, reply,
                 intent="faq", agent_name="faq_agent",
+                rule="approved_course_catalogue",
             )
-        pending_course =self.enrollment.handle_pending_course_selection(
-            conversation, user_text
+        follow_up = (
+            self._follow_up_reply(user_text, course_history, last_assistant_message)
+            if classification.intent == "faq"
+            else None
         )
-        if pending_course is not None:
-            reply, draft = pending_course
-            conversation.active_intent = "enrollment"
-            self.enrollment.remember_intake_choices(conversation, draft)
-            return self._direct_reply(
-                conversation,
-                user_message,
-                draft,
-                reply,
-                intent="enrollment",
-                agent_name="enrollment_agent",
-            )
-        pending_intake = self.enrollment.handle_pending_intake_selection(
-            conversation, user_text
-        )
-        if pending_intake is not None:
-            reply, draft = pending_intake
-            conversation.active_intent = "enrollment"
-            return self._direct_reply(
-                conversation,
-                user_message,
-                draft,
-                reply,
-                intent="enrollment",
-                agent_name="enrollment_agent",
-            )
-
-        follow_up = self._follow_up_reply(user_text, course_history, last_assistant_message)
         if follow_up is not None and follow_up.startswith(COURSE_CHOICE_FOLLOWUP):
             conversation.pending_followup = follow_up
             key = follow_up.removeprefix(COURSE_CHOICE_FOLLOWUP)
@@ -345,10 +739,12 @@ class ChatService:
             return self._direct_reply(
                 conversation, user_message, draft, follow_up,
                 intent="faq", agent_name="faq_agent",
+                rule="contextual_faq_followup",
             )
 
         if (
-            draft is not None
+            classification.intent == "enrollment"
+            and draft is not None
             and draft.status not in {"discarded", "cancelled"}
             and _is_enrollment_progress_request(user_text)
         ):
@@ -369,66 +765,22 @@ class ChatService:
                 self.enrollment.progress_reply(draft),
                 intent="enrollment",
                 agent_name="enrollment_agent",
+                rule="enrollment_progress_lookup",
             )
 
-        invoice_email_request = _invoice_email_request_kind(user_text)
-        if invoice_email_request:
-            if self.enrollment_resolver is not None:
-                invoice_context = self.enrollment_resolver.resolve(conversation, user_text)
-                if invoice_context.ambiguous:
-                    return self._direct_reply(
-                        conversation, user_message, None,
-                        self.enrollment_resolver.clarification_reply(invoice_context),
-                        intent="enrollment", agent_name="enrollment_agent",
-                    )
-                draft = invoice_context.enrollment
-            conversation.active_intent = "enrollment"
-            reply = self._invoice_email_reply(draft, invoice_email_request)
-            result = self._direct_reply(
-                conversation,
-                user_message,
-                draft,
-                reply,
-                intent="enrollment",
-                agent_name="enrollment_agent",
-            )
-            result["show_invoice_action"] = True
-            if draft is not None and self.invoice_email_service is not None:
-                result["invoice_email"] = self.invoice_email_service.serialize(draft)
-            return result
-
-        if _is_invoice_request(user_text):
-            if self.enrollment_resolver is not None:
-                invoice_context = self.enrollment_resolver.resolve(conversation, user_text)
-                if invoice_context.ambiguous:
-                    return self._direct_reply(
-                        conversation, user_message, None,
-                        self.enrollment_resolver.clarification_reply(invoice_context),
-                        intent="enrollment", agent_name="enrollment_agent",
-                    )
-                draft = invoice_context.enrollment
-            conversation.active_intent = "enrollment"
-            result = self._direct_reply(
-                conversation,
-                user_message,
-                draft,
-                self._invoice_status_reply(draft),
-                intent="enrollment",
-                agent_name="enrollment_agent",
-            )
-            result["show_invoice_action"] = True
-            return result
-
-        if _is_intake_availability_request(user_text):
+        if classification.intent == "faq" and _is_intake_availability_request(user_text):
+            intake_focus = self._course_focus(user_text, course_history, draft)[0]
             reply = self.catalogue.approved_faq_reply(
                 ["course dates"],
-                course=self._course_focus(user_text, course_history, draft)[0],
+                course=intake_focus,
             )
             if draft and draft.status not in {
                 "confirmed", "awaiting_course_date", "cancelled"
             }:
                 self.enrollment.remember_intake_choices(conversation, draft)
                 reply += f"\n\n{self.enrollment.next_step_prompt(draft)}"
+            elif draft is None and intake_focus is not None:
+                self._remember_intake_interest_context(conversation, intake_focus)
             return self._direct_reply(
                 conversation,
                 user_message,
@@ -436,15 +788,14 @@ class ChatService:
                 clean_customer_copy(reply),
                 intent="faq",
                 agent_name="faq_agent",
+                rule="approved_intake_availability",
             )
 
-        contextual_decision = _contextual_decision(
-            user_text, conversation.pending_followup
-        )
         if (
             contextual_decision == "reject"
-            and conversation.pending_followup == ENROLLMENT_OFFER_FOLLOWUP
+            and pending_followup_before_decision == ENROLLMENT_OFFER_FOLLOWUP
         ):
+            self._clear_staged_interest(conversation)
             if draft and _is_empty_course_offer_draft(draft):
                 db.session.delete(draft)
                 draft = None
@@ -456,128 +807,132 @@ class ChatService:
                 "No problem. I’m happy to answer any other course questions "
                 "whenever you’re ready."
             )
-            assistant_message = self.repository.add_message(
-                conversation,
-                "assistant",
-                self._with_notice(reply),
-                agent_name="intent_classifier",
-                detected_intent="faq",
-                classification_confidence=1.0,
+            return self._direct_reply(
+                conversation, user_message, draft, reply,
+                intent="faq", agent_name="intent_classifier",
+                rule="decline_enrollment_offer",
             )
-            db.session.commit()
-            return {
-                "conversation_id": conversation.id,
-                "message": serialize_message(assistant_message),
-                "routing": {
-                    "intent": "faq",
-                    "confidence": 1.0,
-                    "agent": "intent_classifier",
-                },
-                "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
-            }
-
-        greeting = _greeting_salutation(user_text)
-        if greeting:
-            name = _first_name(draft.full_name) if draft else None
-            if draft and conversation.active_intent == "enrollment" and draft.status not in {
-                "confirmed",
-                "awaiting_course_date",
-                "cancelled",
-            }:
-                personal = f", {name}" if name else ""
-                reply = (
-                    f"{greeting}{personal}! 👋 We can continue your enrolment. "
-                    f"{self.enrollment.next_step_prompt(draft)}"
-                )
-            else:
-                reply = (
-                    f"{greeting}! 👋 How can I help you today? You can ask about "
-                    "our courses, fees, SkillsFuture support, or start an enrolment."
-                )
-            assistant_message = self.repository.add_message(
-                conversation,
-                "assistant",
-                self._with_notice(reply),
-                agent_name="intent_classifier",
-                detected_intent="unclear",
-                classification_confidence=1.0,
-            )
-            db.session.commit()
-            return {
-                "conversation_id": conversation.id,
-                "message": serialize_message(assistant_message),
-                "routing": {
-                    "intent": "unclear",
-                    "confidence": 1.0,
-                    "agent": "intent_classifier",
-                },
-                "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
-            }
-
-        enrollment_message = user_text
-        course_choices, duplicate_course_choice = self.catalogue.match_course_selection(
-            user_text
-        )
-        if contextual_decision:
-            classification = IntentClassification(
-                intent="enrollment",
-                confidence=1.0,
-                short_reason="Contextual response to the persisted enrollment state.",
-            )
-            enrollment_message = (
-                "Confirm"
-                if conversation.pending_followup
-                == ENROLLMENT_CONFIRMATION_FOLLOWUP
-                and contextual_decision == "confirm"
-                else "not correct"
-                if conversation.pending_followup
-                == ENROLLMENT_CONFIRMATION_FOLLOWUP
-                else "Yes, enrol me in this course"
-            )
-            conversation.pending_followup = None
-        elif (course_choices or duplicate_course_choice) and (
-            draft is not None
-            or "available courses" in str(last_assistant_message or "").casefold()
-            or any(
-                term in user_text.casefold()
-                for term in ("enrol", "enroll", "register", "sign up")
-            )
-        ):
-            classification = IntentClassification(
-                intent="enrollment",
-                confidence=1.0,
-                short_reason="Deterministic canonical course selection.",
-            )
-        elif self.enrollment.is_contextual_stage_reply(
-            draft, user_text, last_assistant_message
-        ):
-            classification = IntentClassification(
-                intent="enrollment",
-                confidence=1.0,
-                short_reason="Contextual answer to the latest enrollment question.",
-            )
-        else:
-            classification = self.ai_service.classify(
-                message=redact_for_classification(user_text),
-                context=self._format_context(prior_messages, redact=True),
-                active_intent=conversation.active_intent,
-                draft_status=draft.status if draft else None,
-                pending_followup=conversation.pending_followup,
-                draft_summary=self._classification_draft_summary(draft),
-            )
-        if classification.intent == "unclear" and (
-            _is_intake_question(user_text)
-            or _is_utap_question(user_text)
-            or _looks_like_question(user_text)
-        ):
-            # A real question gets an answer, or an honest "no confirmed information"
-            # reply about it, rather than the generic greeting.
-            classification.intent = "faq"
-        user_message.detected_intent = classification.intent
-        user_message.classification_confidence = classification.confidence
 
         confirmed_now = False
         was_confirmed = False
+        if classification.intent == "workflow_question":
+            pending_correction = self.enrollment.pending_correction_field(conversation)
+            if pending_correction is not None:
+                correction_label = self.catalogue.enrollment_field_label(
+                    pending_correction
+                ).casefold()
+                reply = (
+                    "The enrollment details are complete. The only pending action is "
+                    f"your request to change the {correction_label}. "
+                    + self.enrollment.correction_prompt(draft, pending_correction)
+                )
+            elif draft and draft.status not in {"discarded", "cancelled"}:
+                reply = (
+                    "Of course — here is your saved progress.\n\n"
+                    f"{self.enrollment.progress_reply(draft)}"
+                )
+            else:
+                reply = self.catalogue.approved_faq_reply(["enrolment process"])
+            return self._direct_reply(
+                conversation, user_message, draft, clean_customer_copy(reply),
+                intent="workflow_question", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="workflow_question_response",
+                confidence=classification.confidence,
+            )
+        if classification.intent == "pause_workflow":
+            reply = (
+                "Of course — we can pause here. Your current enrollment progress "
+                "will stay available in this conversation, and you can ask another "
+                "course question or say ‘Continue my enrollment’ when you’re ready."
+                if draft and draft.status not in {"discarded", "cancelled", "confirmed"}
+                else "Of course. Ask anything about the courses when you’re ready."
+            )
+            return self._direct_reply(
+                conversation, user_message, draft, reply,
+                intent="pause_workflow", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="pause_preserve_pending_state",
+                confidence=classification.confidence,
+            )
+        if classification.intent == "resume_workflow":
+            if draft and draft.status not in {"discarded", "cancelled", "confirmed"}:
+                conversation.active_intent = "enrollment"
+                pending_correction = self.enrollment.pending_correction_field(
+                    conversation
+                )
+                if pending_correction is not None:
+                    correction_label = self.catalogue.enrollment_field_label(
+                        pending_correction
+                    ).casefold()
+                    reply = (
+                        "Welcome back. The only pending action is your request to "
+                        f"change the {correction_label}. "
+                        + self.enrollment.correction_prompt(draft, pending_correction)
+                    )
+                else:
+                    self.enrollment.remember_intake_choices(conversation, draft)
+                    reply = self.enrollment.continuation_reply(draft)
+            else:
+                reply = (
+                    "There isn’t a saved enrollment to continue in this conversation. "
+                    "Tell me which course you’d like to enrol in and we can start."
+                )
+            return self._direct_reply(
+                conversation, user_message, draft, reply,
+                intent="resume_workflow", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="resume_saved_enrollment",
+                confidence=classification.confidence,
+            )
+        if classification.intent == "course_comparison":
+            reply = (
+                "I can compare the approved course details, but I shouldn’t decide "
+                "which course is best for you without knowing your goal.\n\n"
+                f"{self.catalogue.approved_faq_reply(['course description', 'minimum qualification'])}\n\n"
+                "Tell me whether you’re more interested in assisting with clinical "
+                "procedures or working at a dental clinic’s front desk, and I can "
+                "help you compare the factual course information."
+            )
+            return self._direct_reply(
+                conversation, user_message, draft, clean_customer_copy(reply),
+                intent="course_comparison", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="grounded_course_comparison",
+                confidence=classification.confidence,
+            )
+        if classification.intent == "small_talk":
+            greeting = _greeting_salutation(user_text)
+            if first_contact and draft is None and greeting:
+                welcome = self.lead.welcome_reply(greeting)
+                conversation.pending_followup = welcome.followup
+                reply = welcome.reply
+            elif draft and draft.status not in {"discarded", "cancelled", "confirmed"}:
+                name = _first_name(draft.full_name)
+                personal = f", {name}" if name else ""
+                prefix = f"{greeting}{personal}! 👋 " if greeting else ""
+                reply = (
+                    f"{prefix}We can continue your enrolment. "
+                    f"{self.enrollment.next_step_prompt(draft)} You can also ask "
+                    "something else first; your progress will stay saved."
+                )
+            else:
+                reply = f"{greeting}! 👋 {SMALL_TALK_REPLY}" if greeting else SMALL_TALK_REPLY
+            return self._direct_reply(
+                conversation, user_message, draft, reply,
+                intent="small_talk", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="small_talk_boundary",
+                confidence=classification.confidence,
+            )
+        if classification.intent == "unsupported_general_question":
+            return self._direct_reply(
+                conversation, user_message, draft, UNSUPPORTED_GENERAL_REPLY,
+                intent="unsupported_general_question", agent_name="intent_classifier",
+                handler="crewai", routing_agent="classifier",
+                rule="unsupported_general_boundary",
+                confidence=classification.confidence,
+            )
         if classification.intent == "faq":
             name = _first_name(draft.full_name) if draft else None
             focus, scope_is_explicit = self._course_focus(
@@ -633,8 +988,8 @@ class ChatService:
                 if name and reply != self.catalogue.no_intakes_message:
                     reply = _personalise_reply(reply, name)
                 reply += (
-                    "\n\nWhen you’re ready, you can continue with your remaining "
-                    "enrollment details 😊"
+                    "\n\nWhen you’re ready, we can continue where you left off. "
+                    f"{self.enrollment.next_step_prompt(draft)}"
                 )
             else:
                 if name and reply != self.catalogue.no_intakes_message:
@@ -646,6 +1001,12 @@ class ChatService:
                     conversation.pending_followup = ENROLLMENT_CONFIRMATION_FOLLOWUP
             elif self.enrollment.is_waiting_for_course(conversation):
                 pass
+            elif self._staged_interest(conversation):
+                conversation.pending_followup = (
+                    ENROLLMENT_OFFER_FOLLOWUP
+                    if self._staged_interest(conversation).get("intake_id")
+                    else INTAKE_INTEREST_FOLLOWUP
+                )
             else:
                 conversation.pending_followup = (
                     ENROLLMENT_OFFER_FOLLOWUP
@@ -655,17 +1016,51 @@ class ChatService:
             attachment = self.faq_attachments.for_reply(user_text, matched_topics)
         elif classification.intent == "enrollment":
             conversation.active_intent = "enrollment"
+            if self.enrollment_management is not None and not management_first:
+                management = self.enrollment_management.handle(conversation, user_text)
+                if management is not None:
+                    return self._direct_reply(
+                        conversation,
+                        user_message,
+                        management.draft,
+                        management.reply,
+                        intent="enrollment",
+                        agent_name="enrollment_agent",
+                        rule=management.action,
+                    )
             was_confirmed = bool(draft and draft.confirmed_at)
             reply, draft = self.enrollment.handle(
                 conversation,
                 enrollment_message,
                 self._format_context(prior_messages, redact=True),
                 last_assistant_message=last_assistant_message,
+                deterministic_confirmation=(
+                    contextual_decision
+                    if pending_followup_before_decision
+                    == ENROLLMENT_CONFIRMATION_FOLLOWUP
+                    else None
+                ),
             )
             waiting_for_intake = self.enrollment.remember_intake_choices(
                 conversation, draft
             )
+            if (
+                implicit_offer_acceptance
+                and implicit_interest_option_ids
+                and draft is not None
+                and draft.preferred_intake_date is None
+                and not draft.validation_errors
+            ):
+                conversation.pending_intake_options = implicit_interest_option_ids
+                conversation.pending_followup = "intake_selection"
+                reply = self.enrollment.intake_prompt_for_ids(
+                    implicit_interest_option_ids,
+                    draft.course_id or draft.course,
+                )
+                waiting_for_intake = True
             if waiting_for_intake:
+                pass
+            elif self.enrollment.pending_correction_field(conversation):
                 pass
             elif draft is None or draft.course is None:
                 self.enrollment.remember_course_choices(conversation)
@@ -742,7 +1137,21 @@ class ChatService:
             "routing": {
                 "intent": classification.intent,
                 "confidence": classification.confidence,
-                "agent": agent_name,
+                "handler": classification_handler,
+                "agent": (
+                    _routing_agent_name(agent_name)
+                    if classification_handler == "crewai"
+                    else "none"
+                ),
+                "rule": (
+                    classification_rule
+                    if classification_handler == "deterministic"
+                    else "faq_grounded_answer"
+                    if classification.intent == "faq"
+                    else "enrollment_extraction_and_deterministic_validation"
+                    if classification.intent == "enrollment"
+                    else classification_rule
+                ),
             },
             "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
         }
@@ -753,18 +1162,29 @@ class ChatService:
         return result
 
     def _direct_reply(
-        self, conversation, user_message, draft, reply, *, intent, agent_name
+        self,
+        conversation,
+        user_message,
+        draft,
+        reply,
+        *,
+        intent,
+        agent_name,
+        rule="application_rule",
+        handler="deterministic",
+        routing_agent=None,
+        confidence=1.0,
     ):
-        """Persist an application-generated answer without invoking CrewAI."""
+        """Persist an answer and expose how it was actually produced."""
         user_message.detected_intent = intent
-        user_message.classification_confidence = 1.0
+        user_message.classification_confidence = confidence
         assistant_message = self.repository.add_message(
             conversation,
             "assistant",
             self._with_notice(reply),
             agent_name=agent_name,
             detected_intent=intent,
-            classification_confidence=1.0,
+            classification_confidence=confidence,
         )
         db.session.commit()
         return {
@@ -772,8 +1192,16 @@ class ChatService:
             "message": serialize_message(assistant_message),
             "routing": {
                 "intent": intent,
-                "confidence": 1.0,
-                "agent": agent_name,
+                "confidence": confidence,
+                "handler": handler,
+                "agent": (
+                    routing_agent
+                    if routing_agent is not None
+                    else "none"
+                    if handler == "deterministic"
+                    else _routing_agent_name(agent_name)
+                ),
+                "rule": rule,
             },
             "enrollment": serialize_enrollment(draft, self.catalogue, conversation),
         }
@@ -802,6 +1230,55 @@ class ChatService:
             # Mid-enrolment, "how much is the course?" means the course being enrolled in.
             return enrolling, True
         return None, False
+
+    def _remember_intake_interest_context(self, conversation, course):
+        """Remember exactly which approved dates were displayed during enquiry."""
+        options = self.catalogue.selectable_intakes_for(course["id"])
+        data = dict(conversation.pending_change_data or {})
+        data[INTEREST_CONTEXT_KEY] = {
+            "course_id": course["id"],
+            "intake_id": None,
+        }
+        conversation.pending_change_data = data
+        conversation.pending_intake_options = [item["id"] for item in options]
+        conversation.pending_followup = INTAKE_INTEREST_FOLLOWUP
+
+    def _remember_staged_interest(self, conversation, course, intake=None):
+        data = dict(conversation.pending_change_data or {})
+        data[INTEREST_CONTEXT_KEY] = {
+            "course_id": course["id"],
+            "intake_id": intake["id"] if intake is not None else None,
+        }
+        conversation.pending_change_data = data
+        conversation.pending_followup = ENROLLMENT_OFFER_FOLLOWUP
+
+    def _remember_month_interest_context(self, conversation, course, intakes):
+        data = dict(conversation.pending_change_data or {})
+        data[INTEREST_CONTEXT_KEY] = {
+            "course_id": course["id"],
+            "intake_id": None,
+            "intake_option_ids": [item["id"] for item in intakes],
+        }
+        conversation.pending_change_data = data
+        conversation.pending_intake_options = [item["id"] for item in intakes]
+        conversation.pending_followup = INTAKE_INTEREST_FOLLOWUP
+
+    @staticmethod
+    def _staged_interest(conversation):
+        value = dict(conversation.pending_change_data or {}).get(INTEREST_CONTEXT_KEY)
+        return value if isinstance(value, dict) and value.get("course_id") else None
+
+    @staticmethod
+    def _clear_staged_interest(conversation):
+        data = dict(conversation.pending_change_data or {})
+        data.pop(INTEREST_CONTEXT_KEY, None)
+        conversation.pending_change_data = data or None
+        conversation.pending_intake_options = None
+        if conversation.pending_followup in {
+            INTAKE_INTEREST_FOLLOWUP,
+            ENROLLMENT_OFFER_FOLLOWUP,
+        }:
+            conversation.pending_followup = None
 
     def _current_course(self, prior_messages):
         """The course being discussed: from the participant's messages, or else the
@@ -1180,6 +1657,15 @@ def clean_customer_copy(content):
 
 def _first_name(full_name):
     return full_name.split()[0] if full_name else None
+
+
+def _routing_agent_name(agent_name):
+    """Public routing metadata uses stable domain names, not DB implementation labels."""
+    return {
+        "intent_classifier": "classifier",
+        "faq_agent": "faq",
+        "enrollment_agent": "enrollment",
+    }.get(agent_name, "none")
 
 
 def _refers_to_other_course(message):
@@ -1573,6 +2059,11 @@ def _contextual_decision(message, pending_followup):
     normalized = re.sub(r"[^a-z\s]", " ", (message or "").casefold())
     normalized = " ".join(normalized.split())
     affirmatives = {
+        "confirm",
+        "confirmed",
+        "i confirm",
+        "confirm enrollment",
+        "confirm enrolment",
         "yes",
         "yes please",
         "sure",
@@ -1590,6 +2081,8 @@ def _contextual_decision(message, pending_followup):
         "go ahead",
     }
     negatives = {
+        "not correct",
+        "reject",
         "no",
         "no thanks",
         "no thank you",
@@ -1602,6 +2095,123 @@ def _contextual_decision(message, pending_followup):
     if normalized in negatives:
         return "reject"
     return None
+
+
+def _is_displayed_intake_interest_reply(message):
+    """Recognise a selection only after exact approved intake options were shown."""
+    text = " ".join(str(message or "").casefold().split())
+    if not text or "?" in text:
+        return False
+    if re.fullmatch(r"(?:option\s*)?[1-9]|first|second|third", text.strip(" .!")):
+        return True
+    has_date = bool(
+        re.search(
+            r"\b\d{1,2}(?:st|nd|rd|th)?(?:\s+(?:of\s+)?)?"
+            r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+            r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
+            r"dec(?:ember)?)\b",
+            text,
+        )
+    )
+    if not has_date:
+        return False
+    # A bare displayed date is a selection. Longer replies need a positive cue so
+    # an availability question never becomes permission to enroll.
+    words = re.findall(r"[a-z0-9]+", text)
+    return len(words) <= 3 or bool(
+        re.search(
+            r"\b(?:works?|suits?|prefer|choose|take|want|book|reserve|good|okay|ok|"
+            r"go with|fine)\b",
+            text,
+        )
+    )
+
+
+def _is_conversational_clarification(message):
+    text = " ".join(
+        re.sub(r"[^a-z0-9\s]", " ", str(message or "").casefold()).split()
+    )
+    return bool(
+        text in {
+            "what",
+            "huh",
+            "sorry what",
+            "what do you mean",
+            "i don t understand",
+            "i dont understand",
+            "i do not understand",
+            "don t understand",
+            "dont understand",
+        }
+        or re.search(
+            r"\b(?:what do you want|what do you need|what should i send|"
+            r"what is required|what is it|so what now|what next|which number)\b",
+            text,
+        )
+    )
+
+
+def _keeps_current_detail(message):
+    text = " ".join(
+        re.sub(r"[^a-z0-9\s]", " ", str(message or "").casefold()).split()
+    )
+    exact = {
+        "keep current",
+        "keep current number",
+        "keep my current number",
+        "keep current details",
+        "keep my current details",
+        "keep current email",
+        "keep my current email",
+        "keep current name",
+        "keep my current name",
+        "leave it",
+        "leave it as it is",
+        "don t change it",
+        "do not change it",
+        "never mind",
+        "nevermind",
+    }
+    if text in exact:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:(?:wait|actually|sorry|okay|ok|no)\s+)?"
+            r"(?:never\s*mind|don t change it|do not change it|"
+            r"keep (?:my )?current (?:details|email|name|number)|leave it(?: as it is)?)"
+            r"(?:\s+(?:please|thanks|thank you))?",
+            text,
+        )
+    )
+
+
+def _intakes_for_mentioned_month(message, intakes):
+    text = str(message or "").casefold()
+    months = {
+        "january": "01",
+        "february": "02",
+        "march": "03",
+        "april": "04",
+        "may": "05",
+        "june": "06",
+        "july": "07",
+        "august": "08",
+        "september": "09",
+        "october": "10",
+        "november": "11",
+        "december": "12",
+    }
+    mentioned = next(
+        (number for name, number in months.items() if re.search(rf"\b{name}\b", text)),
+        None,
+    )
+    if mentioned is None:
+        return []
+    return [
+        item
+        for item in intakes
+        if str(item.get("start_date", ""))[5:7] == mentioned
+    ]
 
 
 def _offers_enrollment(reply):

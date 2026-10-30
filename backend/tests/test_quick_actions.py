@@ -106,7 +106,7 @@ def test_menu_course_choice_answers_and_keeps_the_menu_open(client, conversation
     text(client, conversation_id, "4")
     dates = text(client, conversation_id, "front desk")
     assert "2 December 2026" in dates and "18–19 November 2026" not in dates
-    assert "Reply with another number from the menu" in dates
+    assert "ask in your own words" in dates
     fees = text(client, conversation_id, "2")
     assert "$450" in fees and "$600" not in fees
 
