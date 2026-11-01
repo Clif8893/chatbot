@@ -45,6 +45,7 @@ COURSE_DATE_COLUMNS = {
 }
 
 CONVERSATION_COLUMNS = {
+    "funding_state": "JSON",
     "user_id": "VARCHAR(36) REFERENCES users(id)",
     "pending_followup": "VARCHAR(32)",
     "pending_action": "VARCHAR(64)",
@@ -57,6 +58,8 @@ CONVERSATION_COLUMNS = {
 }
 
 MESSAGE_COLUMNS = {
+    "kb_entry_ids": "JSON",
+    "response_type": "VARCHAR(32)",
     "image_url": "VARCHAR(500)",
     "image_alt": "VARCHAR(500)",
     "image_status": "VARCHAR(64)",
@@ -77,6 +80,7 @@ MASTER_INVOICE_EXPORT_COLUMNS = {
 }
 
 OUTBOUND_MESSAGE_COLUMNS = {
+    "quick_replies": "JSON",
     "enrollment_id": "VARCHAR(36) REFERENCES enrollment_drafts(id)",
     "invoice_generation_id": "VARCHAR(36) REFERENCES invoice_generations(id)",
     "html_body": "TEXT",
@@ -92,6 +96,14 @@ OUTBOUND_MESSAGE_COLUMNS = {
     "updated_at": "TIMESTAMP",
 }
 
+# Module A per-conversation memory; columns added after the table first shipped.
+CONVERSATION_MEMORY_COLUMNS = {
+    "summary": "TEXT",
+    "through_sequence": "INTEGER DEFAULT 0 NOT NULL",
+    "forgotten_through_sequence": "INTEGER DEFAULT 0 NOT NULL",
+    "abuse_strikes": "INTEGER DEFAULT 0 NOT NULL",
+}
+
 
 def apply_additive_migrations():
     """Add new nullable enrollment fields without replacing existing data."""
@@ -99,6 +111,19 @@ def apply_additive_migrations():
     tables = set(inspector.get_table_names())
 
     with db.engine.begin() as connection:
+        # Reflect on the same connection that applies DDL so schema reads see
+        # the current transaction on SQLite as well as PostgreSQL.
+        inspector = inspect(connection)
+        if "staff_escalations" in tables:
+            existing = {column["name"] for column in inspector.get_columns("staff_escalations")}
+            if "subject" not in existing:
+                connection.execute(text("ALTER TABLE staff_escalations ADD COLUMN subject TEXT"))
+        if "leads" in tables:
+            existing = {column["name"] for column in inspector.get_columns("leads")}
+            for name, kind in {"source": "VARCHAR(32) DEFAULT 'web' NOT NULL", "ad_id": "VARCHAR(255)", "ad_headline": "TEXT", "ctwa_clid": "TEXT"}.items():
+                if name not in existing:
+                    connection.execute(text(f"ALTER TABLE leads ADD COLUMN {name} {kind}"))
+            connection.execute(text("UPDATE leads SET source = 'whatsapp_direct' WHERE channel = 'whatsapp' AND ad_id IS NULL AND source = 'web'"))
         if "enrollment_drafts" in tables:
             existing = {
                 column["name"]
@@ -414,6 +439,18 @@ def apply_additive_migrations():
             columns = {item["name"] for item in inspector.get_columns("payment_reviews")}
             if "corrections_json" not in columns:
                 connection.execute(text("ALTER TABLE payment_reviews ADD COLUMN corrections_json TEXT"))
+        if "conversation_memories" in tables:
+            existing = {
+                column["name"] for column in inspector.get_columns("conversation_memories")
+            }
+            for name, column_type in CONVERSATION_MEMORY_COLUMNS.items():
+                if name not in existing:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE conversation_memories ADD COLUMN "
+                            f"{name} {column_type}"
+                        )
+                    )
 
 
 def backup_sqlite_before_schema_sync():

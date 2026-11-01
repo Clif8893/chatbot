@@ -12,9 +12,9 @@ from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft, Message, utc_now
 from backend.models.operations import (
     AuditEvent, CatalogueContent, ConsentRecord, ContactMapping, CourseDate,
-    FollowupRun, Lead, StaffEscalation,
+    FollowupRun, Lead, StaffEscalation, KnowledgeDraft,
 )
-from backend.services.lead_nurturing import WELCOME_MENU_FOLLOWUP
+from backend.services.conversation_repository import ConversationRepository
 from backend.services.privacy import mask_nrics_in_text, mask_nric
 
 
@@ -40,7 +40,7 @@ def parse_date(value, field):
 
 
 class OperationsService:
-    def __init__(self, catalogue, delivery_service=None, followup_hours=(24, 72, 168), finance_service=None, intake_service=None, master_invoice_service=None):
+    def __init__(self, catalogue, delivery_service=None, followup_hours=(0.5, 24.5, 72.5), finance_service=None, intake_service=None, master_invoice_service=None):
         hours = tuple(float(value) for value in followup_hours)
         if not hours or any(value <= 0 for value in hours) or tuple(sorted(set(hours))) != hours:
             raise ValueError("Follow-up hours must be positive, unique, and increasing.")
@@ -50,6 +50,8 @@ class OperationsService:
         self.finance = finance_service
         self.intakes = intake_service
         self.master_invoice = master_invoice_service
+        # Set by the app to Module A's FollowupComposer.
+        self.followup_composer = None
 
     def _conversation(self, conversation_id):
         conversation = db.session.get(Conversation, conversation_id)
@@ -101,6 +103,8 @@ class OperationsService:
                 conversation = self._conversation(mapping.conversation_id)
         lead = self.lead_for(conversation.id)
         lead.channel, lead.recipient = channel, external_id
+        if not lead.ad_id:
+            lead.source = "whatsapp_direct" if channel == "whatsapp" else channel
         self.record_inbound(conversation.id, now=now)
         db.session.commit()
         return conversation
@@ -169,14 +173,15 @@ class OperationsService:
         db.session.flush()
         return lead
 
-    def escalate(self, conversation_id, reason, category="unrecognised", actor="system"):
+    def escalate(self, conversation_id, reason, category="unrecognised", actor="system", subject=None):
         self._conversation(conversation_id)
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 5000:
             raise ValueError("An escalation reason is required (maximum 5000 characters).")
         # Repeated uncertainty does not produce duplicate open staff cases.
         row = StaffEscalation.query.filter_by(conversation_id=conversation_id, status="open", category=category).first()
         if row is None:
-            row = StaffEscalation(conversation_id=conversation_id, reason=mask_nrics_in_text(reason), category=category)
+            row = StaffEscalation(conversation_id=conversation_id, reason=mask_nrics_in_text(reason), category=category,
+                                  subject=mask_nrics_in_text(str(subject or "").strip()[:500]) or None)
             db.session.add(row)
             self.audit("escalated", reason, conversation_id, actor)
             alert_email = current_app.config.get('STAFF_ALERT_EMAIL')
@@ -206,7 +211,7 @@ class OperationsService:
                 continue
             if consent is None and explicit_consent_required:
                 continue
-            if not lead.recipient or lead.channel not in {"email", "whatsapp"} or not lead.last_contact_at:
+            if not lead.recipient or lead.channel not in {"email", "whatsapp", "web"} or not lead.last_contact_at:
                 continue
             draft = EnrollmentDraft.query.filter_by(conversation_id=lead.conversation_id).first()
             if draft and draft.status not in {"collecting", "awaiting_confirmation"}:
@@ -228,23 +233,28 @@ class OperationsService:
                 continue
             row = FollowupRun(lead_id=lead.id, sequence=lead.sequence, step=step, created_at=now)
             hours = self.followup_hours[step]
-            body = self.followup_body(step)
-            conversation = self._conversation(lead.conversation_id)
+            body = self.followup_body(step, lead.conversation_id)
             # The unique step constraint also protects concurrent scheduler workers.
             # Reserve the step and persist its outbox row in the same savepoint.
             try:
                 with db.session.begin_nested():
                     db.session.add(row)
                     db.session.flush()
-                    delivery = self.notify(lead.channel, lead.recipient, "Q&M dental course enquiry follow-up", body,
-                                           lead.conversation_id, f"lead_followup_{hours:g}h")
-                    row.delivery_id = delivery.id
+                    if lead.channel == "web":
+                        # Web chat reminders are posted in the conversation itself;
+                        # the chat page shows them the next time it checks for messages.
+                        ConversationRepository().add_message(
+                            self._conversation(lead.conversation_id), "assistant", body,
+                            agent_name="followup_scheduler", detected_intent="lead_followup",
+                        )
+                        row.status = "delivered"
+                    else:
+                        delivery = self.notify(lead.channel, lead.recipient, "Q&M dental course enquiry follow-up", body,
+                                               lead.conversation_id, f"lead_followup_{hours:g}h")
+                        row.delivery_id = delivery.id
                     lead.followup_count = len(completed) + 1
                     if lead.followup_count == len(self.followup_hours):
                         lead.status = "timed_out"
-                    if conversation.pending_followup is None and conversation.pending_action is None:
-                        # Reminders invite numbered replies, so re-open the quick-reply menu.
-                        conversation.pending_followup = WELCOME_MENU_FOLLOWUP
                     self.audit("followup_queued", f"Step {step + 1} at {hours:g} hours", lead.conversation_id)
             except IntegrityError:
                 continue
@@ -252,11 +262,12 @@ class OperationsService:
         db.session.commit()
         return {"queued": len(queued), "followup_ids": queued}
 
-    def followup_body(self, step):
-        """Staff-approved reminder wording for a zero-based follow-up step."""
-        templates = self.catalogue.lead_nurturing.get("followup_templates") or []
-        if templates:
-            return templates[min(step, len(templates) - 1)]
+    def followup_body(self, step, conversation_id=None):
+        """Reminder for a zero-based step: Module A's composer when configured."""
+        if self.followup_composer is not None and conversation_id is not None:
+            return self.followup_composer.compose(
+                self._conversation(conversation_id), step, len(self.followup_hours)
+            )
         return ("Following up on your enquiry about our dental courses. "
                 "You can ask about fees or available dates, or tell us you would like to register. "
                 "Reply STOP to stop reminders or ask for a member of our team.")
@@ -475,6 +486,27 @@ class OperationsService:
         return self.case_detail(conversation_id)
 
     def update_content(self, payload, actor="staff"):
+        if "approve_draft_id" in payload:
+            if set(payload) != {"approve_draft_id"}:
+                raise ValueError("Approve one draft at a time.")
+            draft = db.session.get(KnowledgeDraft, payload["approve_draft_id"])
+            if draft is None:
+                raise LookupError("Knowledge draft was not found.")
+            if draft.status != "pending":
+                raise ValueError("This draft has already been reviewed.")
+            kb = current_app.extensions["knowledge_base"]
+            entry = {"id": "staff." + draft.id, "course_id": draft.course_id,
+                     "topic": draft.topic, "approved_text": draft.answer, "source": "Staff approved answer"}
+            list(kb._load_entries([entry]))
+            row = db.session.get(CatalogueContent, "approved_kb")
+            if row is None:
+                row = CatalogueContent(key="approved_kb", value=[])
+                db.session.add(row)
+            row.value = [*row.value, entry]
+            draft.status = "approved"
+            self.audit("knowledge_draft_approved", draft.id, actor=actor)
+            db.session.commit()
+            return self.catalogue.public_summary()
         allowed_course = {"overview", "duration", "training_time", "venue", "website", "no_intakes_message",
                           "minimum_qualification", "job_opportunities", "skillsfuture", "utap", "enrollment", "paynow"}
         if set(payload) - {"course", "faqs"}:
@@ -531,15 +563,23 @@ class OperationsService:
         draft = EnrollmentDraft.query.filter_by(conversation_id=lead.conversation_id).first()
         consent = self.consent_for(lead.conversation_id)
         return {"id": lead.id, "conversation_id": lead.conversation_id, "status": lead.status,
+                "source": lead.source, "ad_id": lead.ad_id, "ad_headline": lead.ad_headline,
+                **self.lead_priority(lead, draft),
                 "channel": lead.channel, "recipient": lead.recipient, "full_name": draft.full_name if draft else None,
                 "email": draft.email if draft else None, "followup_count": lead.followup_count,
                 "last_inbound_at": timestamp(lead.last_inbound_at), "last_contact_at": timestamp(lead.last_contact_at),
                 "consent": {"granted": consent.granted if consent else False, "version": consent.version if consent else None,
                             "recorded_at": timestamp(consent.recorded_at) if consent else None}}
 
+    def lead_priority(self, lead, draft=None):
+        from backend.services.enquiry.analytics import priority
+        messages = Message.query.filter_by(conversation_id=lead.conversation_id).all()
+        return priority(lead, draft, messages)
+
     @staticmethod
     def serialize_escalation(row):
         return {"id": row.id, "conversation_id": row.conversation_id, "reason": row.reason, "category": row.category,
+                "subject": row.subject,
                 "status": row.status, "note": row.note, "created_at": timestamp(row.created_at), "resolved_at": timestamp(row.resolved_at)}
 
     def case_detail(self, conversation_id):
@@ -566,14 +606,33 @@ class OperationsService:
                                      "previous_intake_id": draft.previous_intake_id,
                                      "refund_review_required": bool(draft.refund_review_required)} if draft else None}
 
-    def staff_reply(self, conversation_id, body, subject="Course enquiry", actor="staff"):
+    def staff_reply(self, conversation_id, body, subject="Course enquiry", actor="staff", escalation_id=None, course_id="general"):
         if not isinstance(body, str) or not body.strip() or len(body) > 10000:
             raise ValueError("Reply must be nonempty text of at most 10000 characters.")
         lead = self.lead_for(conversation_id)
+        escalation = None
+        if escalation_id:
+            escalation = db.session.get(StaffEscalation, escalation_id)
+            if not escalation or escalation.conversation_id != conversation_id:
+                raise ValueError("The escalation does not belong to this case.")
+            if escalation.category != "unanswered_question" or escalation.status != "open":
+                raise ValueError("Only an open unanswered question can create a knowledge draft.")
+            if KnowledgeDraft.query.filter_by(escalation_id=escalation_id).first():
+                raise ValueError("An answer draft already exists for this question.")
+            kb = current_app.extensions["knowledge_base"]
+            list(kb._load_entries([{"id": "staff.draft", "course_id": course_id, "topic": escalation.subject or escalation.reason,
+                                   "approved_text": body, "source": "Staff draft"}]))
         if not lead.channel or not lead.recipient:
             raise ValueError("No delivery contact is recorded for this conversation.")
         row = self.notify(lead.channel, lead.recipient, subject, body, conversation_id)
         db.session.add(Message(conversation_id=conversation_id, role="assistant", content=mask_nrics_in_text(body), agent_name="Staff"))
         self.audit("staff_reply_queued", f"Delivery {row.id}", conversation_id, actor)
+        if escalation:
+            db.session.add(KnowledgeDraft(escalation_id=escalation.id, topic=escalation.subject or escalation.reason,
+                                         answer=mask_nrics_in_text(body), course_id=course_id))
+            escalation.status, escalation.resolved_at = "resolved", utc_now()
+            if not StaffEscalation.query.filter_by(conversation_id=conversation_id, status="open").first() and lead.status == "escalated":
+                lead.status = "responded"
+            self.audit("knowledge_draft_created", escalation.id, conversation_id, actor)
         db.session.commit()
         return {"delivery_id": row.id, "status": "queued"}

@@ -81,7 +81,23 @@ def create_operations_blueprint(operations_service, staff_required):
     @handled
     def staff_reply(conversation_id):
         data = payload()
-        return jsonify(service.staff_reply(conversation_id, data.get("body"), data.get("subject", "Course enquiry"), actor())), 202
+        return jsonify(service.staff_reply(conversation_id, data.get("body"), data.get("subject", "Course enquiry"), actor(),
+                                           data.get("escalation_id"), data.get("course_id", "general"))), 202
+
+    @blueprint.get("/knowledge-drafts")
+    @staff_required
+    @handled
+    def knowledge_drafts():
+        from backend.models.operations import KnowledgeDraft
+        return jsonify(knowledge_drafts=[{"id": row.id, "topic": row.topic, "answer": row.answer, "course_id": row.course_id}
+                                        for row in KnowledgeDraft.query.filter_by(status="pending").order_by(KnowledgeDraft.created_at).all()])
+
+    @blueprint.get("/enquiry-analytics")
+    @staff_required
+    @handled
+    def enquiry_analytics():
+        from backend.services.enquiry.analytics import analytics
+        return jsonify(enquiry_analytics=analytics())
 
     @blueprint.post("/cases/<conversation_id>/assign-course-date")
     @staff_required

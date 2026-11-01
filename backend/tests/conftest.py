@@ -1,6 +1,5 @@
 """Shared fixtures with a deterministic substitute for OpenAI/Crew execution."""
 
-import json
 import re
 from uuid import uuid4
 
@@ -8,10 +7,13 @@ import pytest
 
 from backend.agents.schemas import (
     AIServiceError,
+    ConversationDigest,
+    EnquiryTurn,
     EnrollmentExtraction,
     EnrollmentFields,
-    FAQAnswer,
+    FollowupMessage,
     IntentClassification,
+    MemoryFact,
 )
 from backend.app import create_app
 
@@ -19,7 +21,9 @@ from backend.app import create_app
 class FakeAIService:
     def __init__(self):
         self.classify_calls = []
-        self.faq_calls = []
+        self.enquiry_calls = []
+        self.summary_calls = []
+        self.followup_calls = []
         self.enrollment_calls = []
 
     def classify(
@@ -182,91 +186,154 @@ class FakeAIService:
             short_reason="Deterministic test classification.",
         )
 
-    def answer_faq(
-        self, message, context, catalogue_context, customer_first_name=None
+    def converse_enquiry(
+        self,
+        *,
+        message,
+        conversation,
+        profile,
+        prior_conversations,
+        approved_content,
+        policy_hint="",
+        retry_feedback=None,
+        suggestion_menu="",
     ):
-        self.faq_calls.append(
+        """Answer from the matching approved entry, like a well-behaved model.
+
+        It proposes no button ids, so the application's fallback order applies.
+        """
+        self.enquiry_calls.append(
             {
                 "message": message,
-                "context": context,
-                "catalogue_context": catalogue_context,
-                "customer_first_name": customer_first_name,
+                "conversation": conversation,
+                "profile": profile,
+                "prior_conversations": prior_conversations,
+                "approved_content": approved_content,
+                "policy_hint": policy_hint,
+                "retry_feedback": retry_feedback,
+                "suggestion_menu": suggestion_menu,
             }
         )
-        catalogue = json.loads(catalogue_context)
-        course = catalogue["course"]
-        lowered = message.casefold()
-        faq_answers = {item["topic"]: item["answer"] for item in catalogue["faqs"]}
-        topics = []
-        asks_fee = any(term in lowered for term in ("fee", "fees", "cost", "much", "expensive"))
-        asks_duration = any(term in lowered for term in ("duration", "how long", "time"))
-        raises_fee_concern = any(
-            term in lowered
-            for term in ("expensive", "overpriced", "price so high", "cost so much")
+        entries = dict(
+            re.findall(
+                r"^\[([\w.]+)\][^\n]*\n(.*?)(?=\n\n\[|\n\n## |\Z)",
+                approved_content,
+                re.M | re.S,
+            )
         )
-        if raises_fee_concern:
-            topics = ["course fee concern"]
-            answer = faq_answers["course fee concern"]
-        elif "mid-career" in lowered or "mid career" in lowered:
-            topics = ["Mid-Career SkillsFuture"]
-            answer = faq_answers["Mid-Career SkillsFuture"]
-        elif any(term in lowered for term in ("skillsfuture", "skillfuture", "skilsfuture", "funding")):
-            topics = ["SkillsFuture"]
-            answer = faq_answers["SkillsFuture"]
-        elif "utap" in lowered or "union" in lowered:
-            topics = ["UTAP"]
-            answer = faq_answers["UTAP"]
-        elif "paynow" in lowered or "pay now" in lowered or "uen" in lowered:
-            topics = ["PayNow"]
-            answer = faq_answers["PayNow"]
-        elif any(term in lowered for term in ("payment option", "payment mode", "paymnt")):
-            topics = ["payment options"]
-            answer = faq_answers["payment options"]
-        elif asks_fee and asks_duration:
-            topics = ["course fee and value", "duration and timing"]
-            answer = faq_answers["course fee and value"] + " " + faq_answers["duration and timing"]
-        elif asks_fee:
-            topics = ["course fee and value"]
-            answer = faq_answers["course fee and value"]
-        elif asks_duration:
-            topics = ["duration and timing"]
-            answer = faq_answers["duration and timing"]
-        elif "location" in lowered or "where" in lowered or "venue" in lowered:
-            topics = ["venue"]
-            answer = faq_answers["venue"]
-        elif any(
-            term in lowered
-            for term in ("date", "intake", "when", "next class", "next course")
-        ):
-            topics = ["course dates"]
-            answer = course["no_intakes_message"]
-        elif "qualification" in lowered or "qualified" in lowered or "requirement" in lowered:
-            topics = ["minimum qualification"]
-            answer = faq_answers["minimum qualification"]
-        elif "job" in lowered or "position" in lowered or "work" in lowered:
-            topics = ["job opportunities"]
-            answer = faq_answers["job opportunities"]
-        elif "website" in lowered or "more details" in lowered:
-            topics = ["course website"]
-            answer = faq_answers["course website"]
-        elif "invoice" in lowered or "claim steps" in lowered:
-            topics = ["invoice and claim guidance"]
-            answer = faq_answers["invoice and claim guidance"]
-        elif "screenshot" in lowered or "proof of payment" in lowered:
-            topics = ["payment screenshot channel"]
-            answer = faq_answers["payment screenshot channel"]
-        elif "enrol" in lowered or "enroll" in lowered or "register" in lowered:
-            topics = ["enrolment process"]
-            answer = faq_answers["enrolment process"]
-        elif "parking" in lowered:
-            answer = catalogue["reply_style"]["staff_confirmation_message"]
-            return FAQAnswer(answer=answer, matched_topics=[], unanswered_subject="parking at the training venue")
-        else:
-            topics = ["course description"]
-            answer = faq_answers["course description"]
-        if customer_first_name:
-            answer = f"Hi {customer_first_name}. {answer}"
-        return FAQAnswer(answer=answer, matched_topics=topics)
+        lowered = message.casefold()
+
+        def has(*terms):
+            return any(term in lowered for term in terms)
+
+        def grounded(*entry_ids):
+            return EnquiryTurn(
+                reply="\n\n".join(entries[entry_id] for entry_id in entry_ids),
+                response_type="grounded_answer",
+                kb_entry_ids=list(entry_ids),
+                memory_updates=[
+                    MemoryFact(key="topic_answered", value=entry_id)
+                    for entry_id in entry_ids
+                ],
+            )
+
+        greetings = {
+            "hi": "Hi", "hey": "Hi", "hello": "Hello", "how are you": "Hello",
+            "good morning": "Good morning", "gud morning": "Good morning",
+            "morning": "Good morning", "good afternoon": "Good afternoon",
+            "afternoon": "Good afternoon", "good evening": "Good evening",
+            "evening": "Good evening",
+        }
+        greeting = greetings.get(lowered.strip(" .!?"))
+        if greeting:
+            name = re.search(r"First name on their enrollment: (\S+)", profile)
+            salutation = f"{greeting}, {name.group(1)}!" if name else f"{greeting}!"
+            return EnquiryTurn(
+                reply=f"{salutation} 👋 How can I help you with our courses today?",
+                response_type="small_talk",
+            )
+        if has("complain", "complaint"):
+            return EnquiryTurn(
+                reply="I'm sorry to hear that. I've passed this to our team to follow up.",
+                response_type="deescalation",
+                escalation_category="complaint",
+            )
+        if has("thank"):
+            return EnquiryTurn(reply="You're welcome! 😊", response_type="small_talk")
+        if has("capital of", "weather", "joke", "football"):
+            return EnquiryTurn(
+                reply=(
+                    "That's a general question, so I'll keep it brief. Is there "
+                    "anything about our courses I can help with?"
+                ),
+                response_type="general_knowledge",
+            )
+        if has("parking"):
+            return EnquiryTurn(
+                reply=(
+                    "I don't have confirmed information about parking at the "
+                    "training venue. I've asked our team to check."
+                ),
+                response_type="no_confirmed_info",
+                unanswered_subject="parking at the training venue",
+                escalation_category="unanswered_question",
+            )
+        enrolling = re.search(r"Course they are enrolling in: (.+?) \(", profile)
+        if enrolling and not has("front desk", "assisting", "both", "all courses"):
+            # "The course" means the course the participant is enrolling in.
+            lowered = f"{lowered} {enrolling.group(1).casefold()}"
+        if has("front desk"):
+            if has("fee", "cost", "much", "price", "date", "intake", "when", "long", "time", "hour"):
+                return grounded("fd.catalogue_facts")
+            return EnquiryTurn(
+                reply=(
+                    "I don't have confirmed details yet about that for the front desk "
+                    "course. I can ask our team to confirm them for you."
+                ),
+                response_type="no_confirmed_info",
+                kb_entry_ids=["fd.catalogue_facts"],
+                unanswered_subject="the front desk course details",
+            )
+        names_a_course = has("assisting", "dental assistant", "the da ", "da course")
+        if not names_a_course:
+            # A question about "the course" without naming one covers every course.
+            if has("fee", "cost", "much", "price") and not has("expensive", "overpriced"):
+                return grounded("general.courses_offered")
+            if has("date", "intake", "when", "schedule", "next class"):
+                return grounded("da.intake_dates", "fd.catalogue_facts")
+            if has("tell me about the course", "about the courses", "what courses"):
+                return grounded("general.courses_offered", "da.introduction")
+        rules = (
+            (("expensive", "overpriced", "price so high"), "da.fee_concern"),
+            (("mid-career", "mid career", "midcareer"), "da.mid_career"),
+            (("balance",), "da.skillsfuture_balance"),
+            (("skillsfuture", "skillfuture", "skilsfuture", "funding", "sfc"), "da.payment_modes"),
+            (("utap", "union"), "da.utap"),
+            (("paynow", "pay now", "uen"), "da.paynow"),
+            (("payment", "paymnt", "pay"), "da.payment_modes"),
+            (("fee", "cost", "much", "price", "duration", "how long", "hours", "time"), "da.fee_and_timing"),
+            (("venue", "where", "whr", "location"), "da.venue"),
+            (("date", "intake", "when", "schedule", "next class"), "da.intake_dates"),
+            (("qualification", "qualific", "requirement", "experience", "beginner", "suitable"), "da.minimum_qualification"),
+            (("job", "position", "work", "career"), "da.job_opportunities"),
+            (("enrol", "enroll", "register", "sign up", "apply"), "da.enrollment_requirements"),
+            (("course", "corse", "class", "about", "info", "certificate", "website"), "da.introduction"),
+        )
+        for terms, entry_id in rules:
+            if has(*terms):
+                return grounded(entry_id)
+        return EnquiryTurn(
+            reply="Sorry, could you tell me a bit more about what you'd like to know?",
+            response_type="clarifying_question",
+        )
+
+    def compose_followup(self, *, template, profile, conversation, approved_content, final):
+        self.followup_calls.append({"template": template, "profile": profile, "final": final})
+        return FollowupMessage(message=template)
+
+    def summarise_conversation(self, previous_summary, transcript):
+        self.summary_calls.append(transcript)
+        return ConversationDigest(summary="The participant asked about the courses.")
 
     def extract_enrollment(self, message, context, draft_state, tools=None):
         self.enrollment_calls.append(

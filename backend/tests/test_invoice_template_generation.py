@@ -261,7 +261,7 @@ def test_generates_official_template_pdf_for_full_course_fee_without_payment_spl
         assert "NOT A REAL PAYMENT CODE" in payment_text
         assert "DEMO-INV-2027-000001" in payment_text
         assert not fake_ai.classify_calls
-        assert not fake_ai.faq_calls
+        assert not fake_ai.enquiry_calls
         assert not fake_ai.enrollment_calls
         assert hashlib.sha256(source_eml.read_bytes()).hexdigest() == source_hash
         assert not list((tmp_path / "private").glob("qm-invoice-*"))
@@ -319,7 +319,7 @@ def test_grouped_cancellation_reuses_invoice_identity_and_replaces_current_versi
         assert original.version == 1
         assert MasterInvoiceExport.query.count() == 1
         assert converter.calls[-1]["K22"] == 600.0
-        assert converter.calls[-1]["K25"] == 450.0
+        assert converter.calls[-1]["K25"] == 405.0
         assert converter.calls[-1]["H36"] == "=SUM(K22,K25)"
 
     send(client, conversation_id, "Cancel course 2")
@@ -361,7 +361,7 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
 
     send(client, conversation_id, "Add the Front Desk Operations course")
     summary = send(client, conversation_id, "1").get_json()
-    assert "Combined total: S$1,050.00" in summary["message"]["content"]
+    assert "Combined total: S$1,005.00" in summary["message"]["content"]
     send(client, conversation_id, "Confirm change")
 
     with app.app_context():
@@ -379,8 +379,8 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
         assert latest["H22"] == "18–19 November 2026"
         assert latest["H25"] == "2 December 2026"
         assert latest["K22"] == 600.0
-        assert latest["K25"] == 450.0
-        assert latest["H30"] == 1050.0
+        assert latest["K25"] == 405.0
+        assert latest["H30"] == 1005.0
         assert latest["H36"] == "=SUM(K22,K25)"
         assert latest["H31"] is None
         assert latest["H33"] is None
@@ -392,8 +392,8 @@ def test_adding_second_course_updates_same_invoice_once_with_two_line_items(
         assert "Certificate in Dental Clinic Front Desk Operations" in pdf_text
         assert "—" in pdf_text
         assert "18–19 November 2026" in pdf_text and "2 December 2026" in pdf_text
-        assert "S$600.00" in pdf_text and "S$450.00" in pdf_text
-        assert "Total S$1,050.00" in pdf_text
+        assert "S$600.00" in pdf_text and "S$405.00" in pdf_text
+        assert "Total S$1,005.00" in pdf_text
         assert "Payment method" not in pdf_text
 
 
@@ -430,7 +430,7 @@ def test_failed_grouped_invoice_refresh_keeps_registration_change_and_valid_pdf(
         assert EnrollmentDraft.query.one().status == "confirmed"
 
 
-def test_cancelling_first_course_keeps_second_and_revises_same_invoice_to_350(
+def test_cancelling_first_course_keeps_second_and_revises_same_invoice_to_405(
     tmp_path, fake_ai
 ):
     app = invoice_app(tmp_path, fake_ai)
@@ -453,13 +453,13 @@ def test_cancelling_first_course_keeps_second_and_revises_same_invoice_to_350(
         assert updated.invoice_number == original_number
         assert updated.version == 2
         assert converter.calls[-1]["C22"] == "Certificate in Dental Clinic Front Desk Operations"
-        assert converter.calls[-1]["H30"] == 450.0
+        assert converter.calls[-1]["H30"] == 405.0
         assert converter.calls[-1]["H36"] == "=H30"
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
         assert [row.status for row in rows] == ["cancelled", "confirmed"]
 
 
-def test_readding_cancelled_course_reuses_same_invoice_and_restores_950_total(
+def test_readding_cancelled_course_reuses_same_invoice_and_restores_1005_total(
     tmp_path, fake_ai
 ):
     app = invoice_app(tmp_path, fake_ai)
@@ -492,8 +492,8 @@ def test_readding_cancelled_course_reuses_same_invoice_and_restores_950_total(
         assert latest["A22"] == "Basic Certificate in Dental Assisting"
         assert latest["A25"] == "Certificate in Dental Clinic Front Desk Operations"
         assert latest["K22"] == 600.0
-        assert latest["K25"] == 450.0
-        assert latest["H30"] == 1050.0
+        assert latest["K25"] == 405.0
+        assert latest["H30"] == 1005.0
         assert latest["H36"] == "=SUM(K22,K25)"
         readded = EnrollmentCourse.query.filter_by(
             course_id="dental-clinic-front-desk-operations"
@@ -736,9 +736,9 @@ def test_participant_owner_download_status_natural_request_and_idempotency(
     )
     assert "/api/staff/" not in str(document)
 
-    calls_before = len(fake_ai.classify_calls) + len(fake_ai.faq_calls) + len(fake_ai.enrollment_calls)
+    calls_before = len(fake_ai.classify_calls) + len(fake_ai.enquiry_calls) + len(fake_ai.enrollment_calls)
     request_reply = send(owner, conversation_id, "Can I get my invoice?").get_json()
-    calls_after = len(fake_ai.classify_calls) + len(fake_ai.faq_calls) + len(fake_ai.enrollment_calls)
+    calls_after = len(fake_ai.classify_calls) + len(fake_ai.enquiry_calls) + len(fake_ai.enrollment_calls)
     assert request_reply["show_invoice_action"] is True
     assert "invoice is ready" in request_reply["message"]["content"].casefold()
     assert calls_after == calls_before

@@ -26,13 +26,11 @@ export async function getConversationMessages(conversationId) {
   return requestJson(`/api/conversations/${encodeURIComponent(conversationId)}/messages`);
 }
 
-export async function sendChatMessage(message, conversationId, quickAction) {
-  const payload = { message, conversation_id: conversationId };
-  if (quickAction) payload.quick_action = quickAction;
+export async function sendChatMessage(message, conversationId) {
   return requestJson("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ message, conversation_id: conversationId }),
   });
 }
 

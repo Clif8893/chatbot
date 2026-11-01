@@ -370,6 +370,11 @@ class DeliveryService:
         else:
             payload = {"messaging_product": "whatsapp", "to": row.recipient,
                        "type": "text", "text": {"body": row.body}}
+            from backend.services.enquiry.whatsapp_menu import interactive_payload
+            menu = interactive_payload(row.body, row.quick_replies or [])
+            if menu:
+                payload.pop("text")
+                payload.update(type="interactive", interactive=menu)
         response = self.http.post(f"https://graph.facebook.com/{config['WHATSAPP_API_VERSION']}/{phone}/messages",
                                  headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=20)
         response.raise_for_status()

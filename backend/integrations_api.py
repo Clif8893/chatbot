@@ -132,6 +132,14 @@ def register_integrations(app, repository, catalogue, ai_factory, consent_state)
                 if len(matches) == 1:
                     linked_id = matches[0].conversation_id
         conversation = operations.incoming_contact(row.channel, sender, conversation_id=linked_id)
+        lead = operations.lead_for(conversation.id)
+        referral = payload.get("referral") or {}
+        if (isinstance(referral, dict) and referral.get("source_type", "ad") == "ad"
+                and referral.get("source_id") and not lead.ad_id):
+            lead.source = "facebook_ad"
+            lead.ad_id = str(referral["source_id"])[:255]
+            lead.ad_headline = str(referral.get("headline") or "")[:500]
+            lead.ctwa_clid = str(referral.get("ctwa_clid") or "")[:500]
         image = None
         mime = "image/png"
         attachment = payload.get("attachment") or payload.get("image")
@@ -150,7 +158,9 @@ def register_integrations(app, repository, catalogue, ai_factory, consent_state)
             payload['_attachment_mime'] = mime
         row.payload = json.dumps(payload)
         db.session.commit()
-        text = payload.get("body") or payload.get("text", {}).get("body") or (attachment or {}).get("caption") or ""
+        from backend.services.enquiry.whatsapp_menu import inbound_text
+        text = inbound_text(payload) or (attachment or {}).get("caption") or ""
+        quick_replies = []
         if not isinstance(text, str):
             raise ValueError("Message body must be text.")
         if image is not None:
@@ -203,12 +213,18 @@ def register_integrations(app, repository, catalogue, ai_factory, consent_state)
                 ),
                 enrollment_resolver=app.extensions.get("enrollment_resolver"),
                 operations_service=operations,
-                channel=row.channel,
+                knowledge_base=app.extensions.get("knowledge_base"),
             )
             response = service.respond(conversation, text or "Hello")
             reply = response["message"]["content"]
+            quick_replies = response.get("quick_replies", [])
+        separate_menu = row.channel == "whatsapp" and quick_replies and len(reply) > 1024
         delivery.queue(row.channel, sender, "Q&M course enquiry" if row.channel == "email" else None,
-                       reply, conversation_id=conversation.id, purpose="inbound_reply")
+                       reply, conversation_id=conversation.id, purpose="inbound_reply",
+                       quick_replies=[] if separate_menu else quick_replies)
+        if separate_menu:
+            delivery.queue(row.channel, sender, None, "What would you like to explore next?",
+                           conversation_id=conversation.id, purpose="inbound_menu", quick_replies=quick_replies)
         lead = operations.lead_for(conversation.id)
         if lead.status not in {"enrolled", "escalated", "declined"}:
             operations.awaiting_response(conversation.id)

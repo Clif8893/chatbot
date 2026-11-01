@@ -39,9 +39,9 @@ def test_status_variations_are_deterministic(tmp_path, fake_ai, question):
         draft.course_id = "dental-assisting-basic"
         draft.friendly_reference = "ENR-2026-000001"
         db.session.commit()
-    before = (len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls))
+    before = (len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls))
     result = send(client, conversation_id, question).get_json()
-    after = (len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls))
+    after = (len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls))
     content = result["message"]["content"]
     assert after == before
     assert "Enrollment Status: Confirmed" in content
@@ -132,7 +132,7 @@ def test_named_course_questions_are_focused_and_generic_questions_cover_both(tmp
     fresh_conversation = client.post("/api/conversations").get_json()["conversation_id"]
     generic = send(client, fresh_conversation, "How much is the course?").get_json()["message"]["content"]
     assert "$450 nett" in fee and "$600" not in fee
-    assert "training hours have not been confirmed" in timing and "9:30am" not in timing
+    assert "Training hours: to be confirmed" in timing and "9:30am" not in timing
     assert "Which course would you like to check?" not in generic
     assert "$600" in generic and "$450" in generic
 

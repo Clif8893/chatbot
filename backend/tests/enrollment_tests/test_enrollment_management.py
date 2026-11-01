@@ -260,7 +260,7 @@ def test_confirmed_course_change_revalidates_intake_fee_and_capacity(tmp_path, f
     with app.app_context():
         draft = db.session.get(EnrollmentDraft, draft_id)
         assert draft.course == "Certificate in Dental Clinic Front Desk Operations"
-        assert draft.course_fee == Decimal("450")
+        assert draft.course_fee == Decimal("405")
         assert draft.intake_id == "front-desk-operations-2026-12-02"
         assert draft.allocated_intake_id == "front-desk-operations-2026-12-02"
         assert draft.payment_method == "skillsfuture_paynow"
@@ -698,7 +698,7 @@ def test_faq_interruption_preserves_pending_action_and_new_chat_does_not_inherit
         conversation_id,
         "Can I use Mid-Career SkillsFuture Credits?",
     ).get_json()
-    assert "You cannot use Midcareer Skillsfuture Credit" in faq["message"]["content"]
+    assert "You cannot use Mid-Career SkillsFuture Credit" in faq["message"]["content"]
     assert "Front Desk Operations" not in faq["message"]["content"]
     with app.app_context():
         assert db.session.get(Conversation, conversation_id).pending_action == AWAITING_CANCELLATION
@@ -759,10 +759,10 @@ def test_status_queries_are_deterministic_accurate_and_private(tmp_path, fake_ai
     app = management_app(tmp_path, fake_ai)
     client = authenticated_client(app)
     conversation_id, draft_id = add_confirmed(app, client)
-    before = (len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls))
+    before = (len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls))
     response = send(client, conversation_id, "What's my status ah?").get_json()
     content = response["message"]["content"]
-    after = (len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls))
+    after = (len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls))
     assert after == before
     assert "Enrollment Status" in content
     assert "Confirmed" in content

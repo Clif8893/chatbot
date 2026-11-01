@@ -111,7 +111,7 @@ def test_two_course_intakes_summary_and_confirmation_are_grouped_and_idempotent(
     assert "review both course enrollments" in content.casefold()
     assert "Basic Certificate in Dental Assisting" in content
     assert "Certificate in Dental Clinic Front Desk Operations" in content
-    assert "Total amount due: S$1,050 nett" in content
+    assert "Total amount due: S$1,005 nett" in content
     assert not any(
         phrase in content
         for phrase in ("Payment method", "PayNow amount", "SkillsFuture amount")
@@ -124,7 +124,7 @@ def test_two_course_intakes_summary_and_confirmation_are_grouped_and_idempotent(
     with app.app_context():
         draft = EnrollmentDraft.query.one()
         rows = EnrollmentCourse.query.order_by(EnrollmentCourse.position).all()
-        assert draft.course_fee == Decimal("1050.00")
+        assert draft.course_fee == Decimal("1005.00")
         assert len(rows) == 2
         assert all(row.status == "confirmed" for row in rows)
         assert len({row.id for row in rows}) == 2

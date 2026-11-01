@@ -196,7 +196,7 @@ def test_progress_variants_are_semantically_routed_and_draft_grounded(
     assert "Mid-Career SkillsFuture" not in content
     assert "image_url" not in response["message"]
     assert len(fake_ai.classify_calls) == before + 1
-    assert len(fake_ai.faq_calls) == 0
+    assert len(fake_ai.enquiry_calls) == 0
 
 
 def test_repeated_progress_is_consistent_and_masks_nric(tmp_path, fake_ai):

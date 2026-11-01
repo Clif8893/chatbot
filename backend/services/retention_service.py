@@ -6,8 +6,10 @@ from flask import current_app
 from backend.extensions import db
 from backend.models import Conversation, EnrollmentDraft, Message, utc_now
 from backend.models.communications import InboxEvent, OutboundMessage
+from backend.models.memory import ConversationMemory, ParticipantMemory
+from backend.services.enquiry.memory_service import MemoryService
 from backend.models.finance import CreditNoteRequest, FinanceAudit, FinanceCase, FinancialDocument, Invoice, InvoiceGeneration, Payment, PaymentEvidence, PaymentReview
-from backend.models.operations import AuditEvent, ConsentRecord, ContactMapping, FollowupRun, Lead, StaffEscalation
+from backend.models.operations import AuditEvent, ConsentRecord, ContactMapping, FollowupRun, Lead, StaffEscalation, KnowledgeDraft
 
 
 class RetentionService:
@@ -25,8 +27,11 @@ class RetentionService:
             if not (lead or active_finance or recent_message):
                 ids.append(row.id)
         inbox = db.session.execute(db.select(InboxEvent).where(InboxEvent.created_at < cutoff)).scalars().all()
+        # Module A memory profiles idle for the same window are deleted (decision D6).
+        stale_profiles = db.session.execute(db.select(db.func.count(ParticipantMemory.id)).where(ParticipantMemory.updated_at < cutoff)).scalar()
         if dry_run:
-            return {'dry_run': True, 'expired_cases': len(ids), 'expired_inbox_events': len(inbox), 'cutoff': cutoff.isoformat()}
+            return {'dry_run': True, 'expired_cases': len(ids), 'expired_inbox_events': len(inbox),
+                    'expired_memory_profiles': stale_profiles, 'cutoff': cutoff.isoformat()}
         drafts = list(db.session.execute(db.select(EnrollmentDraft.id).where(EnrollmentDraft.conversation_id.in_(ids))).scalars())
         lead_ids = list(db.session.execute(db.select(Lead.id).where(Lead.conversation_id.in_(ids))).scalars())
         expired_keys = set(db.session.execute(db.select(FinancialDocument.storage_key).where(FinancialDocument.enrollment_id.in_(drafts))).scalars())
@@ -51,13 +56,16 @@ class RetentionService:
         for model in (CreditNoteRequest, PaymentReview, Payment, PaymentEvidence, FinanceAudit, FinancialDocument, InvoiceGeneration, Invoice, FinanceCase):
             db.session.execute(db.delete(model).where(model.enrollment_id.in_(drafts)))
         db.session.execute(db.delete(FollowupRun).where(FollowupRun.lead_id.in_(lead_ids)))
-        for model in (OutboundMessage, StaffEscalation, ConsentRecord, ContactMapping, AuditEvent, Lead, Message, EnrollmentDraft):
+        escalation_ids = db.select(StaffEscalation.id).where(StaffEscalation.conversation_id.in_(ids))
+        db.session.execute(db.delete(KnowledgeDraft).where(KnowledgeDraft.escalation_id.in_(escalation_ids)))
+        for model in (OutboundMessage, StaffEscalation, ConsentRecord, ContactMapping, AuditEvent, Lead, Message, EnrollmentDraft, ConversationMemory):
             db.session.execute(db.delete(model).where(model.conversation_id.in_(ids)))
         db.session.execute(db.delete(Conversation).where(Conversation.id.in_(ids)))
         for row in inbox:
             db.session.delete(row)
         # Old outbox messages have their own communication retention window.
         db.session.execute(db.delete(OutboundMessage).where(OutboundMessage.created_at < cutoff))
+        expired_profiles = MemoryService().purge_expired(cutoff)
         db.session.commit()
         storage_root = Path(current_app.config['STORAGE_DIR']).resolve()
         for key in generated_invoice_keys:
@@ -77,4 +85,5 @@ class RetentionService:
             if path.is_file() and path.name not in referenced and all(c in '0123456789abcdef-' for c in path.name) and (path.name in expired_keys or path.stat().st_mtime < cutoff.timestamp()):
                 path.unlink()
                 removed += 1
-        return {'dry_run': False, 'expired_cases': len(ids), 'expired_inbox_events': len(inbox), 'removed_objects': removed}
+        return {'dry_run': False, 'expired_cases': len(ids), 'expired_inbox_events': len(inbox),
+                'expired_memory_profiles': expired_profiles, 'removed_objects': removed}

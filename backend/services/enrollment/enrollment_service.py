@@ -9,6 +9,8 @@ from sqlalchemy import and_, or_
 from backend.extensions import db
 from backend.agents.schemas import EnrollmentExtraction
 from backend.models import Conversation, EnrollmentCourse, EnrollmentDraft, utc_now
+from backend.services.course_catalogue import intake_days
+from backend.services.reply_parsing import referenced_position
 from backend.services.enrollment.registration_group_service import (
     add_course,
     clear_intake as clear_course_intake,
@@ -922,27 +924,21 @@ class EnrollmentService:
 
     def _match_pending_intake(self, option_ids, message, course=None):
         normalized = " ".join(str(message or "").casefold().split())
-        number_match = re.fullmatch(r"(?:option\s*)?(\d+)", normalized)
-        if number_match:
-            position = int(number_match.group(1))
+        position = referenced_position(normalized)
+        if position is not None:
             if 1 <= position <= len(option_ids):
                 selected = self.catalogue.intake_for_id(option_ids[position - 1])
                 if selected:
                     return selected, None
-            return None, "Please choose one of the displayed intake numbers."
-
-        ordinal_match = re.search(
-            r"\b(?:the\s+)?(first|second|third)(?:\s+(?:option|intake|one))?\b",
-            normalized,
-        )
-        if ordinal_match:
-            position = {"first": 1, "second": 2, "third": 3}[
-                ordinal_match.group(1)
+            # "28th" is too large to be a list number; try it as a day.
+            same_day = [
+                item
+                for intake_id in option_ids
+                if (item := self.catalogue.intake_for_id(intake_id))
+                and position in intake_days(item)
             ]
-            if position <= len(option_ids):
-                selected = self.catalogue.intake_for_id(option_ids[position - 1])
-                if selected:
-                    return selected, None
+            if len(same_day) == 1:
+                return same_day[0], None
             return None, "Please choose one of the displayed intake numbers."
 
         if "last" in normalized and "weekend" in normalized:
@@ -962,6 +958,10 @@ class EnrollmentService:
             return selected, None
         if selected:
             return None, "That choice was not in the intake list shown for this conversation."
+        # The caller re-displays this conversation's intake list, so drop the
+        # catalogue's own list to avoid showing two different lists.
+        if error:
+            error = error.split("\n\nAvailable choices:", 1)[0]
         return None, error or "Please choose one of the displayed intake numbers or dates."
 
     def _intake_availability_error(self, intake, draft):
@@ -2097,11 +2097,10 @@ def _looks_like_pending_intake_selection(message):
         # choice has been resolved. Treat them as an invalid intake response so
         # the deterministic stage gate re-prompts without saving any identity.
         return True
-    if re.fullmatch(r"(?:option\s*)?\d+", normalized):
+    # "Is the 2nd one on a weekend?" asks about an option; it does not choose it.
+    if "?" not in normalized and referenced_position(normalized) is not None:
         return True
-    if re.search(
-        r"\b(?:first|second|third)\s+(?:option|intake|one)\b", normalized
-    ):
+    if re.search(r"\b[0-3]?\d[/.][01]?\d\b", normalized):
         return True
     if "last weekend" in normalized:
         return True
@@ -2116,8 +2115,8 @@ def _looks_like_pending_intake_selection(message):
     ):
         return True
     if len(normalized.split()) <= 5 and re.search(
-        r"\b(?:january|february|march|april|may|june|july|august|"
-        r"september|october|november|december)\b",
+        r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|"
+        r"aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b",
         normalized,
     ):
         return True
@@ -2132,7 +2131,7 @@ def _looks_like_intake_change(message):
     )
     choice_cue = bool(
         re.search(
-            r"\b(?:option\s*)?\d+\b|\b(?:first|second|third|last)\s+"
+            r"\b(?:option\s*)?\d+(?:st|nd|rd|th)?\b|\b(?:first|second|third|last)\s+"
             r"(?:option|intake|one|weekend)\b",
             normalized,
         )
@@ -2309,6 +2308,9 @@ def _draft_detail_lookup(message):
     )
     if all_details:
         return "all"
+    # A supplied value such as "corrected.student@example.com" is not a cue
+    # that the participant is asking whether a detail was corrected.
+    text = re.sub(r"\S+@\S+", " ", text)
     memory_cue = bool(
         re.search(
             r"\b(?:did\s+i\s+(?:give|provide|enter|type|send|use)|"

@@ -119,7 +119,8 @@ def test_contextual_no_after_course_offer_stays_in_enquiry_mode(
 
     response = send(client, conversation_id, "No thanks").get_json()
 
-    assert response["routing"]["intent"] == "unclear"
+    # The approved introduction offers enrollment, so "No thanks" declines it.
+    assert response["routing"]["rule"] == "decline_enrollment_offer"
     assert response["enrollment"]["status"] is None
 
 
@@ -363,3 +364,111 @@ def test_single_field_correction_preserves_other_identity_values(
         assert draft.full_name == "Test Student"
         assert draft.nric == "S1234567D"
         assert draft.mobile_number == "91234567"
+
+
+@pytest.mark.parametrize("reply", ["2nd", "second", "the 2nd one", "option 2", "no. 2"])
+def test_ordinal_intake_reply_selects_displayed_option(client, conversation_id, reply):
+    selection = send(
+        client, conversation_id, "I want to enroll in Dental Assisting"
+    ).get_json()["message"]["content"]
+    second_option = next(
+        line.split(". ", 1)[1].split(" — ")[0]
+        for line in selection.splitlines()
+        if line.startswith("2. ")
+    )
+
+    payload = send(client, conversation_id, reply).get_json()
+
+    assert "not one of the available intakes" not in payload["message"]["content"]
+    assert second_option in payload["message"]["content"]
+    assert payload["enrollment"]["missing_fields"][0] == "full_name"
+
+
+def test_invalid_intake_reply_lists_only_the_selected_course_once(
+    client, conversation_id
+):
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
+
+    content = send(client, conversation_id, "sometime next year").get_json()[
+        "message"
+    ]["content"]
+
+    assert "Available choices:" not in content
+    assert content.count("📅 Available Intake Dates") == 1
+
+
+def test_catalogue_clarification_is_scoped_to_course():
+    catalogue = CourseCatalogue(CATALOGUE_PATH)
+    course = catalogue.courses[0]
+    _, error = catalogue.match_intake_selection("not a date", course["id"])
+    listed = [line for line in error.split("Available choices:\n", 1)[1].splitlines() if line]
+    assert len(listed) == len(catalogue.selectable_intakes_for(course["id"]))
+
+
+@pytest.mark.parametrize(
+    "reply", ["28 nov", "nov 28", "28/11", "28/11/2026", "28th nov", "28th", "29 Nov"]
+)
+def test_intake_reply_accepts_common_date_formats(client, conversation_id, reply):
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
+
+    payload = send(client, conversation_id, reply).get_json()
+
+    assert "28–29 November 2026" in payload["message"]["content"]
+    assert payload["enrollment"]["missing_fields"][0] == "full_name"
+
+
+@pytest.mark.parametrize(
+    ("reply", "course"),
+    [("2nd", "Front Desk"), ("frontdesk", "Front Desk"), ("DA", "Dental Assisting"),
+     ("assisting", "Dental Assisting")],
+)
+def test_course_menu_accepts_short_course_replies(client, conversation_id, reply, course):
+    send(client, conversation_id, "I want to enroll")
+
+    content = send(client, conversation_id, reply).get_json()["message"]["content"]
+
+    assert "Available Intake Dates" in content
+    assert course in content.split("Available Intake Dates")[0]
+
+
+@pytest.mark.parametrize("reply", ["yep", "y", "ok confirm", "looks good", "yes, that's correct"])
+def test_final_confirmation_accepts_common_yes_replies(client, conversation_id, reply):
+    for message in (
+        "I want to enroll in Dental Assisting", "1", "My name is Test Student",
+        "My NRIC is S1234567D", "My DOB is 1990-01-02",
+        "My email is test.student@example.com", "My mobile number is 91234567",
+    ):
+        send(client, conversation_id, message)
+
+    assert send(client, conversation_id, reply).get_json()["enrollment"]["status"] == "confirmed"
+
+
+@pytest.mark.parametrize(
+    ("reply", "course"),
+    [("i am interested in the 2nd", "Front Desk"), ("the first one please", "Dental Assisting")],
+)
+def test_course_menu_accepts_a_position_inside_a_sentence(client, conversation_id, reply, course):
+    send(client, conversation_id, "I want to enroll")
+
+    content = send(client, conversation_id, reply).get_json()["message"]["content"]
+
+    assert "Available Intake Dates" in content
+    assert course in content.split("Available Intake Dates")[0]
+
+
+@pytest.mark.parametrize("reply", ["the 2nd one works for me", "I'll go for the second option"])
+def test_intake_menu_accepts_a_position_inside_a_sentence(client, conversation_id, reply):
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
+
+    payload = send(client, conversation_id, reply).get_json()
+
+    assert "28–29 November 2026" in payload["message"]["content"]
+    assert payload["enrollment"]["missing_fields"][0] == "full_name"
+
+
+def test_question_about_an_intake_option_does_not_choose_it(client, conversation_id):
+    send(client, conversation_id, "I want to enroll in Dental Assisting")
+
+    payload = send(client, conversation_id, "is the 2nd one on a weekend?").get_json()
+
+    assert payload["enrollment"]["missing_fields"][0] != "full_name"

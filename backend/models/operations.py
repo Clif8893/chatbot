@@ -23,6 +23,10 @@ class Lead(db.Model):
     conversation_id = db.Column(db.String(36), db.ForeignKey("conversations.id"), nullable=False, unique=True)
     status = db.Column(db.String(32), nullable=False, default="enquiry", index=True)
     channel = db.Column(db.String(24), nullable=True)
+    source = db.Column(db.String(32), nullable=False, default="web")
+    ad_id = db.Column(db.String(255))
+    ad_headline = db.Column(EncryptedText())
+    ctwa_clid = db.Column(EncryptedText())
     recipient = db.Column(EncryptedText(), nullable=True)
     last_inbound_at = db.Column(db.DateTime(timezone=True), nullable=True)
     last_contact_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -59,6 +63,7 @@ class StaffEscalation(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=new_id)
     conversation_id = db.Column(db.String(36), db.ForeignKey("conversations.id"), nullable=False, index=True)
     reason = db.Column(EncryptedText(), nullable=False)
+    subject = db.Column(EncryptedText())
     category = db.Column(db.String(64), nullable=False)
     status = db.Column(db.String(24), nullable=False, default="open", index=True)
     note = db.Column(EncryptedText(), nullable=True)
@@ -100,3 +105,14 @@ class CatalogueContent(db.Model):
     key = db.Column(db.String(32), primary_key=True)
     value = db.Column(db.JSON, nullable=False)
     updated_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+
+class KnowledgeDraft(db.Model):
+    __tablename__ = "knowledge_drafts"
+    id = db.Column(db.String(36), primary_key=True, default=new_id)
+    escalation_id = db.Column(db.String(36), db.ForeignKey("staff_escalations.id"), nullable=False, unique=True)
+    topic = db.Column(EncryptedText(), nullable=False)
+    answer = db.Column(EncryptedText(), nullable=False)
+    course_id = db.Column(db.String(64), nullable=False, default="general")
+    status = db.Column(db.String(24), nullable=False, default="pending")
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utc_now)

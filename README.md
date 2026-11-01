@@ -2,9 +2,10 @@
 
 This repository contains the active requirements baseline and a working
 prototype for course enquiries and conversational enrollment. A React/Vite chat
-client calls a Flask REST API. Flask controls the workflow, CrewAI coordinates
-three OpenAI-backed agents, and SQLAlchemy preserves conversations and enrollment
-drafts across reloads and later days.
+client calls a Flask REST API. Flask controls the workflow, CrewAI runs the
+intent classifier, the Module A enquiry agent and the Module B enrollment agent,
+and SQLAlchemy preserves conversations, enrollment drafts and participant memory
+across reloads and later days.
 
 The central catalogue contains the planned integrated versions of two courses:
 Basic Certificate in Dental Assisting (S$600 nett) and Certificate in Dental
@@ -17,14 +18,11 @@ Automated tests use only synthetic identities.
 
 The current implementation includes:
 
-- Intent classification into `faq`, `enrollment`, or `unclear`
-- Module A lead nurturing in natural language (no slash commands): a numbered
-  quick-reply menu on first contact or when the participant asks for "help" or
-  the "menu", opt-out by STOP or phrases such as "please stop sending me
-  reminders", staff escalation for requests to talk to someone, sensitive
-  messages and questions approved content cannot answer, and staff-editable
-  3-step lead follow-up templates
-- A grounded FAQ/Enquiry Agent using editable company course information
+- Intent classification shared by both modules
+- Module A, a conversational enquiry assistant (see below and
+  [docs/module-a](docs/module-a/requirements.md)): approved answers, sensible
+  replies to anything else, memory across a participant's chats, staff
+  escalation, opt-out and memory-aware follow-up reminders
 - An Enrollment Agent that collects selected course(s), one intake per course,
   name, NRIC/FIN, date of birth, email, and mobile number
 - Deterministic Python validation and explicit confirmation before saving
@@ -35,33 +33,67 @@ The current implementation includes:
 - SQLite locally, with PostgreSQL support through `DATABASE_URL`
 - Database-backed history, browser conversation resumption, and a new-conversation action
 
-FAQ replies follow the course the participant means. A question naming one
-course by name, short name, list position ("the 2nd course"), duration ("the
-1-day course") or fee is answered for that course only. Follow-up questions,
-quick-action buttons, the numbered menu and "I'd like to enrol" stay on the
-course the conversation is about. "Your course", "courses", "both" or "all", or
-a fresh conversation with no course discussed, is answered for both courses. Each FAQ
-in `course_information.json` has a general `answer` plus optional per-course
-`course_answers`, which staff can edit in the portal.
+### Module A: enquiry assistant
 
-FAQ answers for the Basic Certificate in Dental Assisting use the wording of
-`2 days DA course Reply Template.docx` verbatim (job opportunities, minimum
-qualification, Mid-Career SkillsFuture, "why is your course so expensive",
-modes of payment, UTAP and the introduction). Replies are tailored only where
-the question needs it: a fee or timing question gets the matching template
-sentence, the introduction lists current intakes instead of the template's
-historical dates and omits the unconfirmed venue, and generic funding or payment
-answers add one line noting that Front Desk funding is not yet confirmed. The Front Desk Operations
-course has no supplied funding or payment source, so those answers still defer
-to staff. Its course description (`overview`) was drafted for the prototype and
-must be approved by Q&M before production use. Lead-nurturing wording lives in the `lead_nurturing` block of
-`backend/data/course_information.json`.
+Every message that Module B does not own goes to Module A's `EnquiryService`:
+questions, greetings, general questions, unclear messages, rude remarks and
+requests for staff. Crisis messages, threats, STOP, "forget me" and requests
+for a person are handled by Module A even in the middle of an enrollment. When
+a participant clearly wants to enrol, Module A hands over to Module B's
+existing enrollment offer.
 
-Leads who message Q&M first by WhatsApp or email are told in the first reply
-that up to three reminders may follow and that STOP opts out. Set
-`FOLLOWUP_REQUIRE_EXPLICIT_CONSENT=true` to send reminders only to leads with a
-recorded opt-in; a recorded withdrawal always blocks them. `FOLLOWUP_HOURS`
-defaults to `48,96,144` (REQ-03); the proposal's sequence is `24,72,168`.
+How replies stay accurate and appropriate:
+
+- **Approved facts only.** Q&M facts come from
+  `backend/data/enquiry_knowledge_base.json`. That file holds the reply-template
+  wording, with live fees and intake dates filled in from the course catalogue.
+  A deterministic fact guard rejects any price, date, time, percentage or link
+  that is not approved, and the participant's own figures are allowed, so
+  "S$600 − S$500 = S$100 top-up" works. Unknown Q&M details get "I don't have
+  confirmed information" plus a staff case.
+- **Anything else.** Harmless general questions get a brief answer and a steer
+  back to the course. Personal medical, legal, financial or political advice is
+  declined. Rudeness is de-escalated, and a third offence or any threat closes
+  the chat and alerts staff. Crisis cues receive helpline details. Attempts to
+  change or reveal the assistant's instructions are declined.
+- **Memory.** A whitelisted, encrypted profile (name, course and intake
+  interest, payment preference, stated credit, concerns, constraints) and
+  conversation summaries carry across a participant's chats. NRIC, date of
+  birth, email and phone are never stored there. The first Module A reply in a
+  chat discloses this; "forget me" clears it, and idle profiles are deleted
+  after `RETENTION_DAYS`.
+- **Follow-ups.** Reminders at `FOLLOWUP_HOURS` (default `0.5,24.5,72.5`: 30
+  minutes, then 1 day and 2 days after the previous reminder, from the workflow
+  deck) start from approved templates and are
+  personalised from memory. They fall back to the template unchanged if
+  anything fails the checks. Set `FOLLOWUP_REQUIRE_EXPLICIT_CONSENT=true` to
+  send reminders only to leads with a recorded opt-in; STOP always stops them.
+  WhatsApp and email enquirers are reminded on their own channel. Web chat
+  reminders are posted in the conversation itself (no email or WhatsApp
+  setup needed); the open chat page checks for them every minute.
+- **Running the reminders.** Start the built-in scheduler alongside the API:
+
+  ```powershell
+  .\backend\.venv\Scripts\python.exe -m flask --app backend.app automation-worker --interval 300
+  ```
+
+  It runs the inbox, follow-up and delivery jobs every `--interval` seconds
+  (keep it well under 30 minutes so the first reminder is on time; `--once`
+  runs one pass). Web chat reminders work straight away. Until email
+  (`EMAIL_DELIVERY_ENABLED` and `SMTP_*`) or WhatsApp (`WHATSAPP_*`) is
+  configured it only queues those messages, because a failed send is not
+  retried. An external scheduler such as cron or n8n can
+  instead call `POST /api/automation/run` with
+  `Authorization: Bearer <AUTOMATION_API_TOKEN>`.
+
+Content decisions made where the source materials conflict or are silent (venue
+not stated, Front Desk details deferred to staff, crisis wording, language,
+memory retention) are recorded as D1–D6 in
+[docs/module-a/requirements.md](docs/module-a/requirements.md) and await Q&M
+sign-off. Staff edit enquiry wording as described in the
+[content-update guide](docs/module-a/content-update-guide.md). The portal's
+existing course/FAQ content editor still feeds the Enrollment Agent's reference
+information, but not Module A's replies.
 
 External email, WhatsApp and payment-vision actions remain disabled until their
 server-side credentials are configured. Payment evidence always requires staff
@@ -78,6 +110,9 @@ review unless an approved verification policy is explicitly enabled.
 - [Requirements template](docs/templates/requirements-template.md)
 - [Design template](docs/templates/design-template.md)
 - [Tasks template](docs/templates/tasks-template.md)
+- Module A specification: [requirements](docs/module-a/requirements.md), [design](docs/module-a/design.md), [tasks](docs/module-a/tasks.md)
+- [Module A content-update guide](docs/module-a/content-update-guide.md)
+- [Module A live evaluation results](docs/module-a/evaluation-results.md)
 - [Enrollment Agent implementation overview](docs/enrollment/ENROLLMENT_OVERVIEW.md)
 - [Enrollment Agent development workbook](notebooks/enrollment/Enrollment_Agent_Development_Workbook.ipynb)
 
@@ -87,21 +122,30 @@ current source of truth.
 ## Architecture
 
 ```text
-React/Vite chat
+React/Vite chat                     WhatsApp/email inbound (integrations)
+      |                                        |
+      v                                        v
+Flask REST API --------> SQLAlchemy (SQLite or PostgreSQL)
       |
       v
-Flask REST API ----> SQLAlchemy (SQLite or PostgreSQL)
-      |
-      v
-Application router
-      |----> CrewAI Intent Classification Agent
-      |----> CrewAI FAQ/Enquiry Agent ----> company course information
-      `----> CrewAI Enrollment Agent ----> deterministic validator/state machine
+Application router (ChatService)
+      |----> crisis / threat / STOP / forget me / staff request ---------+
+      |----> Module B pre-emption (pending actions, choices, invoices)   |
+      |----> CrewAI Intent Classification Agent                          |
+      |          |----> enrollment ----> CrewAI Enrollment Agent         |
+      |          |                         --> deterministic validator   |
+      |          `----> everything else ------------------------------+  |
+      |                                                               v  v
+      `--------------------------------------------- Module A EnquiryService
+                 pre-checks -> memory -> CrewAI Enquiry Agent -> fact guard
+                 -> staff cases, consent, memory updates, hand-off to Module B
 ```
 
-The OpenAI model is configured through `OPENAI_MODEL`, allowing it to be changed
-without modifying application code. CrewAI 1.15.21 supplies the OpenAI provider
-adapter used by all three agents.
+`OPENAI_MODEL` sets the classifier and enrollment model. Module A uses
+`ENQUIRY_MODEL`/`ENQUIRY_API_KEY` when set (for example
+`anthropic/claude-sonnet-5-5`, which needs the `anthropic` package), and
+otherwise the same OpenAI settings. CrewAI 1.15.21 supplies the provider
+adapters.
 
 ## Folder Guide
 
@@ -111,12 +155,15 @@ adapter used by all three agents.
 | `frontend/src/components/enrollment/` | Participant-facing enrollment status, invoice, and payment-evidence UI |
 | `backend/agents/` | CrewAI agent definitions and Pydantic output contracts |
 | `backend/services/` | Shared CrewAI execution, persistence, routing, privacy, finance, and catalogue services |
+| `backend/services/enquiry/` | Module A: knowledge base, fact extraction and guard, message pre-checks, memory, enquiry service, follow-up composer |
 | `backend/services/enrollment/` | Enrollment state machine, parsing, validation, intake allocation, and participant enrollment management |
 | `backend/tools/enrollment/` | Read-only tools scoped to the Enrollment Agent runtime |
 | `backend/models/` | SQLAlchemy models |
-| `backend/data/` | Editable company course information and ignored local SQLite data/backups |
-| `backend/tests/` | Shared model-free automated tests plus one opt-in live smoke test |
+| `backend/data/` | Editable company course information, Module A's `enquiry_knowledge_base.json`, and ignored local SQLite data/backups |
+| `backend/tests/` | Shared model-free automated tests plus opt-in live tests |
+| `backend/tests/enquiry_tests/` | Module A tests and the evaluation set (`eval/enquiry_cases.jsonl`) |
 | `backend/tests/enrollment_tests/` | Enrollment Agent, course-selection, intake, memory, management, and workflow regression tests |
+| `docs/module-a/` | Module A specification, content-update guide and evaluation results |
 | `docs/enrollment/` | Enrollment Agent implementation and integration documentation |
 | `notebooks/enrollment/` | Offline Enrollment Agent development evidence |
 | `docs/` | Current project documentation and archived drafts |
@@ -144,6 +191,9 @@ the file or repository. Optional backend settings are documented in
 
 ```dotenv
 OPENAI_MODEL=
+# Optional Module A model; blank uses OPENAI_MODEL and OPENAI_API_KEY.
+ENQUIRY_MODEL=
+ENQUIRY_API_KEY=
 DATABASE_URL=
 CONVERSATION_CONTEXT_MESSAGE_LIMIT=20
 FLASK_SECRET_KEY=change-me
@@ -260,7 +310,14 @@ Normal tests mock the AI boundary, so they are deterministic and incur no API us
 ```powershell
 .\backend\.venv\Scripts\python.exe -m pytest backend\tests -q
 Set-Location frontend
+npm test
 npm run build
+```
+
+Module A's own suite runs on its own in a few minutes:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m pytest backend\tests\enquiry_tests -q
 ```
 
 ### Offline Enrollment Agent workbook
@@ -286,3 +343,22 @@ Remove-Item Env:RUN_REAL_OPENAI_TEST
 
 That opt-in command uses the backend API key and may incur provider usage. Do not
 run it in routine CI.
+
+### Module A live evaluation
+
+78 scripted conversations check Module A against the configured model. They
+cover FAQ accuracy, unknown facts, general questions, rudeness, threats,
+distress, prompt injection, memory, hand-off and language. Each turn is scored
+deterministically, and category thresholds come from the Module A success
+criteria. The run is opt-in because it makes roughly 150–200 provider calls:
+
+```powershell
+$env:RUN_LIVE_ENQUIRY_EVAL="1"
+.\backend\.venv\Scripts\python.exe -m pytest -m live_provider backend\tests\enquiry_tests\test_live_enquiry_evaluation.py -q -s
+Remove-Item Env:RUN_LIVE_ENQUIRY_EVAL
+```
+
+Set `EVAL_REPORT_PATH` to keep the JSON report and `EVAL_CASES` to run
+selected case ids. Results so far are recorded in
+[docs/module-a/evaluation-results.md](docs/module-a/evaluation-results.md).
+Rerun after changing the knowledge base, prompts or model.

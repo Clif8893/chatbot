@@ -97,7 +97,7 @@ The participant reply shall explain that eligible NTUC Union members may claim 5
 
 #### Acceptance Criteria
 
-1. IF a participant does not reply after the initial enquiry response THEN the system SHALL make three follow-up attempts at two-day intervals.
+1. IF a participant does not reply after the initial enquiry response THEN the system SHALL make three follow-up attempts: 30 minutes after the response, then 1 day and 2 days after the previous attempt.
 2. WHEN the participant responds, declines, enrolls, or is marked for staff handling THEN the system SHALL stop any remaining automatic lead follow-ups.
 3. WHEN a follow-up attempt is made THEN the system SHALL record its sequence number and time.
 4. IF all three attempts receive no response THEN the system SHALL mark the lead as requiring no further automatic follow-up while keeping the record available to staff.
@@ -255,7 +255,7 @@ The participant reply shall explain that eligible NTUC Union members may claim 5
 
 ## Open Questions
 
-1. **Lead follow-up timing:** The workflow presentation specifies attempts after 30 minutes, one day, and two days. The later 5 August 2026 email specifies three attempts at two-day intervals. REQ-03 uses the later email rule, but Q&M should confirm that it supersedes the presentation timing.
+1. **Lead follow-up timing:** The workflow presentation specifies attempts after 30 minutes, one day, and two days. The later 5 August 2026 email specifies three attempts at two-day intervals. REQ-03 now follows the presentation timing (project owner's decision, 31 October 2026); Q&M should confirm that it supersedes the email rule.
 2. **Course venue:** The reply template states "HQ, Clementi Loop"; workflow examples show the Q&M Dental Centre auditorium at 180 Kitchener Road; and the email signature identifies the head office at 2 Jurong East Street 21, IMM Building. Which venue should be sent for each future intake?
 3. **Future intake dates:** The July and August 2026 dates in the reply template and dates shown in workflow screenshots are historical. Who approves and maintains the current dates, booking limits, and closed/full status?
 4. **Payment confirmation rule:** What evidence or staff approval is required before PayNow and SkillsFuture amounts are treated as confirmed, especially while a SkillsFuture claim is pending?

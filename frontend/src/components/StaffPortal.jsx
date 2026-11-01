@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import PaymentWorkspace from "./PaymentWorkspace.jsx";
+import { EnquiryInsights, PendingKnowledge } from "./EnquiryInsights.jsx";
 import {
   apiBaseUrl,
   documentUrl,
@@ -235,6 +236,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
     const paths = ["overview", "enrollments", "accounts", "payments"].includes(tab)
       ? [
           "dashboard",
+          "enquiry-analytics",
           "enrollments",
           ...(financeAccess
             ? [
@@ -251,7 +253,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
             ? ["leads", "escalations"]
             : tab === "schedule"
               ? ["course-dates"]
-              : ["content"];
+              : ["content", "knowledge-drafts"];
     const results = await Promise.allSettled(
       paths.map((path) => requestJson(`/api/staff/${path}`)),
     );
@@ -383,6 +385,7 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
           {tab === "overview" && (
             <>
               <Metrics dashboard={data.dashboard} reviews={data.reviews} enrollments={data.enrollments} financeAccess={financeAccess} />
+              <EnquiryInsights analytics={data.enquiry_analytics} />
               <div className="overview-panels">
                 <section className="workspace-card">
                   <h2>Enrollment progress</h2>
@@ -512,11 +515,14 @@ function StaffWorkspace({ session, onLogout, sessionError }) {
             />
           )}
           {tab === "content" && data.content && (
+            <React.Fragment>
+            <PendingKnowledge drafts={data.knowledge_drafts} action={action} working={working} />
             <ContentEditor
               content={data.content}
               action={action}
               working={working}
             />
+            </React.Fragment>
           )}
         </div>
       </main>
@@ -1519,6 +1525,7 @@ function LeadWorkspace({ data, action, working }) {
                 <th>Participant</th>
                 <th>Status</th>
                 <th>Last activity</th>
+                <th>Source / priority</th>
                 <th>Follow-ups</th>
                 <th>Consent</th>
                 <th>
@@ -1529,6 +1536,7 @@ function LeadWorkspace({ data, action, working }) {
             <tbody>
               {data.leads
                 .filter((lead) => filter === "all" || lead.status === filter)
+                .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0))
                 .map((lead) => (
                   <tr key={lead.id}>
                     <td>
@@ -1542,6 +1550,10 @@ function LeadWorkspace({ data, action, working }) {
                     </td>
                     <td>
                       {date(lead.last_inbound_at || lead.last_contact_at)}
+                    </td>
+                    <td>
+                      <span title={(lead.priority_reasons || []).join(", ")}><Badge>{lead.temperature || "Cold"}</Badge></span>
+                      {readable(lead.source)}<small>{lead.ad_headline || lead.ad_id}</small>
                     </td>
                     <td>{lead.followup_count || 0} / 3</td>
                     <td>
@@ -1585,6 +1597,7 @@ function LeadWorkspace({ data, action, working }) {
 
 function EscalationRow({ escalation, action, working, onOpen }) {
   const [note, setNote] = useState("");
+  const [courseId, setCourseId] = useState("general");
   return (
     <article className="escalation-row">
       <div>
@@ -1600,22 +1613,29 @@ function EscalationRow({ escalation, action, working, onOpen }) {
         onSubmit={(event) => {
           event.preventDefault();
           action(
-            `/api/staff/escalations/${escalation.id}`,
-            { status: "resolved", note },
+            escalation.category === "unanswered_question" ? `/api/staff/cases/${escalation.conversation_id}/reply` : `/api/staff/escalations/${escalation.id}`,
+            escalation.category === "unanswered_question" ? { body: note, escalation_id: escalation.id, course_id: courseId } : { status: "resolved", note },
             "Escalation resolved.",
-            "PATCH",
+            escalation.category === "unanswered_question" ? "POST" : "PATCH",
           );
         }}
       >
         <label>
           <span className="visually-hidden">Resolution note</span>
-          <input
+          <textarea
             value={note}
             onChange={(event) => setNote(event.target.value)}
-            placeholder="Resolution note"
+            placeholder={escalation.category === "unanswered_question" ? "Answer to send and save for review" : "Resolution note"}
             required
           />
         </label>
+        {escalation.category === "unanswered_question" && <label>Answer applies to
+          <select value={courseId} onChange={(event) => setCourseId(event.target.value)}>
+            <option value="general">All courses</option>
+            <option value="dental-assisting-basic">Dental Assisting (Basic)</option>
+            <option value="dental-clinic-front-desk-operations">Dental Clinic Front Desk Operations</option>
+          </select>
+        </label>}
         <button className="secondary-button" type="submit" disabled={working}>
           Resolve case
         </button>

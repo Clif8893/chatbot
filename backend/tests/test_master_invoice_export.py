@@ -515,7 +515,7 @@ def test_export_does_not_call_ai_and_generated_files_are_ignored(tmp_path, fake_
     enrollment_id = add_draft(app, participant)
     before = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
     with app.app_context():
@@ -524,7 +524,7 @@ def test_export_does_not_call_ai_and_generated_files_are_ignored(tmp_path, fake_
         )
     after = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
     assert after == before

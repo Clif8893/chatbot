@@ -126,7 +126,7 @@ def test_add_second_course_is_staged_without_unconfirming_first_and_updates_same
 
     summary = send(client, conversation_id, "1").get_json()
     assert "updated two-course registration" in summary["message"]["content"]
-    assert "Combined total: S$1,050.00" in summary["message"]["content"]
+    assert "Combined total: S$1,005.00" in summary["message"]["content"]
     assert [row["status"] for row in summary["enrollment"]["courses"]] == [
         "confirmed",
         "pending_addition",
@@ -196,7 +196,7 @@ def test_group_status_excludes_cancelled_course_and_keeps_current_invoice(
 
     calls_before = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
     status = send(client, conversation_id, "Which courses am I registered for?").get_json()
@@ -211,7 +211,7 @@ def test_group_status_excludes_cancelled_course_and_keeps_current_invoice(
     assert "private" not in content.casefold()
     assert calls_before == (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
 
@@ -430,7 +430,7 @@ def test_pending_cancellation_number_is_locked_to_displayed_child_list(
 
     calls_before = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
     status = send(client, conversation_id, "Which courses am I registered for?").get_json()
@@ -438,7 +438,7 @@ def test_pending_cancellation_number_is_locked_to_displayed_child_list(
     assert "Draft" not in status["message"]["content"]
     assert calls_before == (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
 

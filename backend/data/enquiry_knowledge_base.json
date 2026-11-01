@@ -1,0 +1,264 @@
+{
+  "version": "2026-10-30",
+  "maintainer_notes": [
+    "Approved content for the Module A enquiry assistant. Only approved_text and fixed_replies are shown to participants or the model; notes are for maintainers.",
+    "Placeholders in braces are filled from the live course catalogue: course_name, course_fee, duration, training_time, intake_list, website, paynow_uen, claim_page, course_list, da_course_fee, fd_course_fee.",
+    "Entries with confirmation_required true must never be stated as fact; their approved_text is the only permitted reply.",
+    "followup_templates are the approved reminders (one per step, sent at FOLLOWUP_HOURS). They hold no fees or dates and must keep the STOP opt-out; the assistant may personalise them from memory but falls back to them unchanged.",
+    "suggestions are the only buttons the assistant can offer. Each covers the entries it leads to; a suggestion is hidden once any covered entry has been answered for the participant (in this or an earlier chat). starter_suggestions open a new chat; suggestion_order fills the buttons when the assistant picks none.",
+    "Entries with lists_intakes true show one course's selectable dates; after a reply citing one, a bare date such as '18 November' is treated as interest in that intake.",
+    "Reply-template wording is kept, with spelling corrected; dates and venue are omitted because live intakes and decision D1 replace them."
+  ],
+  "sources": {
+    "reply_template": "docs/source-materials/proposal/2 days DA course Reply Template.docx",
+    "workflow_deck": "docs/source-materials/proposal/Agentive Workflow for Dental Assisting Course Administration.pptx",
+    "proposal": "docs/source-materials/proposal/QM_AI_Powered_Enquiry_and_Enrollment_System_V2_4.pdf",
+    "catalogue": "backend/data/course_information.json and the staff-managed course_dates table",
+    "decisions": "docs/module-a/requirements.md, Decisions on Open Questions"
+  },
+  "entries": [
+    {
+      "id": "general.courses_offered",
+      "course_id": "general",
+      "topic": "Courses offered",
+      "approved_text": "We currently offer:\n{course_list}",
+      "source": "catalogue",
+      "confirmation_required": false
+    },
+    {
+      "id": "general.government_systems",
+      "course_id": "general",
+      "topic": "Singpass and SkillsFuture accounts",
+      "approved_text": "We can't log in to Singpass or SkillsFuture on your behalf, check your credit balance for you, or submit a SkillsFuture claim for you. You can check your balance and submit your claim yourself on the official MySkillsFuture portal.",
+      "source": "proposal §3 Module A note; §9 exclusions",
+      "confirmation_required": false
+    },
+    {
+      "id": "general.language",
+      "course_id": "general",
+      "topic": "Language of instruction",
+      "approved_text": "Our classes and assessments are conducted in English.",
+      "source": "reply_template — minimum qualification",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.introduction",
+      "course_id": "dental-assisting-basic",
+      "topic": "Course introduction",
+      "approved_text": "Thank you for your interest in our {course_name} course.\nCourse fee: {course_fee} (you may use SkillsFuture Credit to pay for the course fee)\nDuration: {duration}\nTraining hours: {training_time}\nFor more details on the contents, please visit our website at {website}.\nUpcoming intakes:\n{intake_list}\nIf you are interested in enrolling, let me know and I'll be happy to assist 😊",
+      "notes": "Template venue 'HQ, Clementi Loop' omitted (decision D1). Template July/August 2026 dates replaced by live intakes. The template's SkillsFuture sentence sits on the fee line because models reformatting the reply kept dropping it as a trailing sentence.",
+      "source": "reply_template — Introduction",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.course_content",
+      "course_id": "dental-assisting-basic",
+      "topic": "Course content and benefits",
+      "approved_text": "Dental Assisting is a valuable skill set that can be learned and developed with practice. During this 2-day class, you'll be guided through your daily job scope such as:\n• recognising dental instruments & materials\n• infection control\n• how to anticipate the dentist's needs during procedures\nWith consistent practice and hands-on experience, you'll build confidence and become more proficient in assisting.",
+      "source": "workflow_deck — slide 3 (Step 2a)",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.fee_and_timing",
+      "course_id": "dental-assisting-basic",
+      "topic": "Course fee, duration and training hours",
+      "approved_text": "Course fee: {course_fee}\nDuration: {duration}\nTraining hours: {training_time}",
+      "source": "reply_template — Introduction; catalogue",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.intake_dates",
+      "course_id": "dental-assisting-basic",
+      "topic": "Upcoming intake dates",
+      "approved_text": "Upcoming intakes for the {course_name}:\n{intake_list}",
+      "source": "catalogue (staff-managed course dates)",
+      "confirmation_required": false,
+      "lists_intakes": true
+    },
+    {
+      "id": "da.payment_modes",
+      "course_id": "dental-assisting-basic",
+      "topic": "Modes of payment",
+      "approved_text": "There are three modes of payment.\n1) SkillsFuture Credit basic tier (please note that our course is not eligible for Mid-Career SkillsFuture Credits)\n2) PayNow. UEN: {paynow_uen}\n3) NTUC Union Membership (UTAP): 50% off the course fee. You'll have to pay upfront first and get reimbursed after completion of the course. You are not able to use both SkillsFuture Credit and the Union member subsidy; you can only use either UTAP or SkillsFuture Credits.",
+      "source": "reply_template — Mode of Payment",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.skillsfuture_balance",
+      "course_id": "dental-assisting-basic",
+      "topic": "Checking SkillsFuture Credit balance",
+      "approved_text": "You can check your SkillsFuture Credit balance using this link: {claim_page}\nPlease let me know how much credit you'll be using to pay for the course. This helps us generate an accurate invoice for your SkillsFuture claim submission, and we'll email you the steps to claim from the SkillsFuture portal.",
+      "source": "reply_template — Enrollment; proposal §3 (guided self-check)",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.mid_career",
+      "course_id": "dental-assisting-basic",
+      "topic": "Mid-Career SkillsFuture Credit",
+      "approved_text": "There are two tiers of SkillsFuture Credit. Our courses are only eligible for the basic tier. You cannot use Mid-Career SkillsFuture Credit to pay for this course fee; Mid-Career credits are usually for longer courses. You may log in to the SkillsFuture portal to find out the balance of your basic-tier SkillsFuture credits: {claim_page}",
+      "source": "reply_template — Can use Midcareer Skillsfuture?; workflow_deck — slide 3",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.skillsfuture_top_up",
+      "course_id": "dental-assisting-basic",
+      "topic": "Topping up when SkillsFuture Credit is not enough",
+      "approved_text": "If your basic-tier SkillsFuture Credit balance is less than the course fee, you can use your credits for part of the fee and top up the remaining amount (the course fee minus the credits you use) via PayNow.",
+      "source": "workflow_deck — slide 3 (participant with partial credit told to top up the difference via PayNow)",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.paynow",
+      "course_id": "dental-assisting-basic",
+      "topic": "PayNow",
+      "approved_text": "PayNow is accepted. UEN: {paynow_uen}. Payment arrangements are handled after your enrollment is confirmed.",
+      "source": "reply_template — Mode of Payment; catalogue",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.utap",
+      "course_id": "dental-assisting-basic",
+      "topic": "UTAP funding support (NTUC)",
+      "approved_text": "All NTUC Union members are eligible for 50% unfunded course fee support, up to $250 per year (or up to $500 per year for NTUC members aged 40 and above) through the Union Training Assistance Programme (UTAP) for this course.\nHow to apply for UTAP funding support:\nStep 1: Ensure your NTUC Union membership is valid. You can check your membership status by chatting with NTUC's chat bot at ntuc.co/chat or logging in to your U Portal at www.ntuc.org.sg\nStep 2: Enroll in the course and attend both days of training.\nStep 3: After completing the course, log in to your U Portal account to submit your UTAP claim. You will need proof of payment (e.g. course invoice/receipt) and proof of completion (e.g. certificate/results slip). Both documents will be provided to you after the course.\nImportant: Please submit your UTAP claim within 6 months of course completion. Late submissions will not be accepted.",
+      "source": "reply_template — How to Apply for UTAP Funding Support",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.fee_concern",
+      "course_id": "dental-assisting-basic",
+      "topic": "Concern that the course is expensive",
+      "approved_text": "Thank you for your feedback regarding the course fee. We understand that cost is an important consideration, and we strive to ensure that our pricing reflects the value and quality of the education and resources provided.\nThe fee for our 2-day course includes comprehensive materials, expert instruction, and access to specialised equipment and facilities. We believe this investment will greatly benefit your professional development and skill set.\nHowever, we do appreciate your concerns and will take them into consideration for future planning. If there are specific aspects of the course or pricing you'd like to discuss further, please feel free to reach out :)",
+      "source": "reply_template — Why is your course so expensive?",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.job_opportunities",
+      "course_id": "dental-assisting-basic",
+      "topic": "Job opportunities after the course",
+      "approved_text": "We do offer job opportunities for suitable candidates on the last day of the class. The selection process from HR involves various contributing factors to ensure we find the best fit for the role, including:\n- location of workplace\n- schedule\n- skills and experience\n- cultural fit\n- interview performance\nA job is not guaranteed.",
+      "source": "reply_template — Will I be offered a position at the end of the course?",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.hr_interview",
+      "course_id": "dental-assisting-basic",
+      "topic": "HR interview for a Dental Assistant position",
+      "approved_text": "If you're interested in joining Q&M as a Dental Assistant, you'll need to go through the standard HR interview process like all candidates. This includes submitting your resume and attending a Zoom interview with HR. If you pass the interview, you'll then be offered a position, and we'll also have mentors to guide and support you along the way, so you won't be learning alone 😊 We aren't able to advise on the specific questions HR may ask.",
+      "source": "workflow_deck — slides 3 and 4 (Steps 2a and 2b)",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.minimum_qualification",
+      "course_id": "dental-assisting-basic",
+      "topic": "Minimum qualification and experience",
+      "approved_text": "We prefer candidates with GCE 'N' Levels. However, if you do not have GCE 'N' Levels, we are open to considering candidates who have basic reading and writing skills in English, as the classes and assessment will be conducted in English. No prior dental experience is needed :)",
+      "notes": "'No prior dental experience is needed' follows the deck's description of the course as beginner-friendly (slide 2) and the proposal's FAQ on attending without experience (§2).",
+      "source": "reply_template — minimum qualification; workflow_deck — slides 2 and 3",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.enrollment_requirements",
+      "course_id": "dental-assisting-basic",
+      "topic": "What is needed to enroll",
+      "approved_text": "To register, we'll need:\n1. Full name (as per NRIC)\n2. NRIC number\n3. Date of birth\n4. Email address\n5. Mobile number\n6. Whether you will be using SkillsFuture credits or PayNow/internet transfer to pay for the course fee\nOnce we have your details, we'll generate your invoice and email you the confirmation and the steps to claim from the SkillsFuture portal. Just let me know when you'd like to enroll.",
+      "source": "reply_template — Enrollment",
+      "confirmation_required": false
+    },
+    {
+      "id": "da.venue",
+      "course_id": "dental-assisting-basic",
+      "topic": "Training venue",
+      "approved_text": "The training venue will be confirmed in your enrollment confirmation. If you'd like to know sooner, I can ask our team to confirm it for you.",
+      "notes": "Sources conflict: reply template says HQ, Clementi Loop; deck slide 2 says Q&M City Square Mall Auditorium. Decision D1: do not state a venue.",
+      "source": "decisions — D1",
+      "confirmation_required": true
+    },
+    {
+      "id": "da.funding_estimator",
+      "course_id": "dental-assisting-basic",
+      "topic": "Personal funding estimate",
+      "approved_text": "For a personal estimate of upfront payment and possible later reimbursement for {course_name}, reply Calculate funding. The calculator uses the course fee of {course_fee}, basic-tier SkillsFuture Credit only, and the approved UTAP rules. Eligibility, annual allowance and claim approval still apply.",
+      "source": "Module A funding calculator; approved payment and UTAP rules",
+      "confirmation_required": false
+    },
+    {
+      "id": "fd.catalogue_facts",
+      "course_id": "dental-clinic-front-desk-operations",
+      "topic": "Everything confirmed about this course, and what is not yet confirmed",
+      "approved_text": "{course_name}\nCourse fee: {course_fee}\n{discount_terms}\nBasic-tier SkillsFuture Credit and UTAP are supported under the same rules as the Basic Certificate in Dental Assisting. The Q&M discount is applied first; use either SkillsFuture Credit or UTAP, not both.\nDuration: {duration}\nTraining hours: {training_time}\nUpcoming intakes:\n{intake_list}\nNot yet confirmed: the course content, other payment arrangements, entry requirements and job opportunities. For these, I can ask our team to confirm the details for you.",
+      "notes": "Decision D4 amended on 1 November 2026: the project owner confirmed the same funding eligibility as Course 1, after the Q&M-funded discount. Other unapproved facts still require staff confirmation. The catalogue overview remains a prototype draft and is not used.",
+      "source": "catalogue; decisions — D4; project-owner approval of Q&M-funded discount, 1 November 2026",
+      "confirmation_required": false,
+      "lists_intakes": true
+    },
+    {
+      "id": "fd.utap",
+      "course_id": "dental-clinic-front-desk-operations",
+      "topic": "UTAP funding support (NTUC)",
+      "approved_text": "Eligible NTUC union members may claim 50% of the unfunded course fee after the Q&M-funded discount through UTAP. The annual cap is S$250 for members below 40, or S$500 for members aged 40 and above, subject to eligibility, remaining annual entitlement and claim approval. Pay upfront and claim after course completion within 6 months, using proof of payment and completion. UTAP cannot be combined with SkillsFuture Credit. Calculate funding uses the current course fee after the Q&M discount.",
+      "source": "Project owner confirmed Course 1 funding eligibility for Course 2 on 1 November 2026",
+      "confirmation_required": false
+    },
+    {
+      "id": "fd.payment_modes",
+      "course_id": "dental-clinic-front-desk-operations",
+      "topic": "SkillsFuture Credit and UTAP payment options",
+      "approved_text": "Basic-tier SkillsFuture Credit may cover all or part of the fee after the Q&M discount. With UTAP, pay upfront and claim 50% of the unfunded fee after course completion, subject to annual caps and eligibility. Choose either SkillsFuture Credit or UTAP; they cannot be combined. Other payment arrangements require staff confirmation.",
+      "source": "Project owner confirmed Course 1 funding eligibility for Course 2 on 1 November 2026",
+      "confirmation_required": false
+    },
+    {
+      "id": "fd.mid_career",
+      "course_id": "dental-clinic-front-desk-operations",
+      "topic": "Mid-Career SkillsFuture Credit",
+      "approved_text": "Only basic-tier SkillsFuture Credit is accepted for this course. Mid-Career SkillsFuture Credit is not eligible. You can check your basic-tier balance and submit your own claim at {claim_page}.",
+      "source": "Project owner confirmed Course 1 funding eligibility for Course 2 on 1 November 2026",
+      "confirmation_required": false
+    },
+    {
+      "id": "general.fees_and_funding",
+      "course_id": "general",
+      "topic": "Course fees and UTAP overview",
+      "approved_text": "The amount you pay depends on the course:\n- Basic Certificate in Dental Assisting: **{da_course_fee}**.\n- Certificate in Dental Clinic Front Desk Operations: **{fd_course_fee}**.\n{fd_discount_terms}\nFor either course, you may use basic-tier SkillsFuture Credit toward the fee. Alternatively, eligible NTUC members may claim UTAP after paying upfront and completing the course. UTAP is a reimbursement, not an upfront discount, and cannot be combined with SkillsFuture Credit. Claims are subject to eligibility, remaining annual entitlement and claim approval. The annual cap is **S$250 for members below 40**, or **S$500 for members aged 40 and above**.\nLet me know if you need help with anything else! 😊",
+      "source": "User-approved fee, SkillsFuture and UTAP wording; catalogue",
+      "confirmation_required": false
+    }
+  ],
+  "fixed_replies": {
+    "first_contact_privacy": "To help you better, I remember what we chat about. Reply \"forget me\" anytime to clear it, or STOP to stop reminders.",
+    "language_note": "Just so you know, I reply in English as our classes and assessments are conducted in English.",
+    "unanswered": "I don't have confirmed information about {subject}. I've asked our team to check and get back to you 😊",
+    "human_request": "Sure! I've asked a member of our team to get in touch with you here. In the meantime, I'm happy to help with any course questions.",
+    "crisis_support": "I'm really sorry you're going through this. If you are in immediate danger, please call 995. You can also talk to someone at Samaritans of Singapore (SOS) any time on 1767; it's free and confidential. I've let a member of our team know so they can reach out to you.",
+    "decline_instructions": "I'm not able to share how I work behind the scenes, but I'm happy to help with any questions about our courses 😊",
+    "abuse_close":"I'd like to keep our conversation respectful, so I'll pause here and ask a member of our team to follow up with you.",
+    "opt_out": "Understood. We won't send you any more reminders. If you have questions later, just message us here.",
+    "forget_me": "Done! I've cleared what I remembered from our chats. Any enrollment you've made isn't affected. How else can I help?",
+    "fallback": "Sorry, I'm having trouble answering right now. I've asked our team to follow up with you, or you can try again in a moment."
+  },
+  "followup_templates": [
+    "Hi! 👋 Just checking in on your enquiry about our dental courses. Do you have any questions about the courses, fees or funding? Just reply here and I'll be happy to help. Reply STOP to opt out of reminders.",
+    "Hi again! Would you like help with anything about our dental courses, such as SkillsFuture funding, upcoming dates or securing a place? Reply here anytime, or ask to talk to our team. Reply STOP to opt out of reminders.",
+    "Hi! This is our last reminder about your dental course enquiry. If you are still interested, just reply and we'll be happy to help you enrol or answer any questions. Reply STOP to opt out. Thank you! 😊"
+  ],
+  "suggestions": [
+    {"id": "funding_estimate", "label": "Calculate funding", "covers": ["da.funding_estimator"]},
+    {"id": "fees", "label": "Fees & funding", "covers": ["general.fees_and_funding", "da.fee_and_timing", "da.payment_modes", "general.courses_offered", "da.introduction"]},
+    {"id": "dates", "label": "Upcoming dates", "covers": ["da.intake_dates", "da.introduction"]},
+    {"id": "requirements", "label": "Entry requirements", "covers": ["da.minimum_qualification"]},
+    {"id": "jobs", "label": "Job opportunities", "covers": ["da.job_opportunities"]},
+    {"id": "content", "label": "What the course covers", "covers": ["da.course_content"]},
+    {"id": "sfc_balance", "label": "Check my SkillsFuture balance", "covers": ["da.skillsfuture_balance", "general.government_systems"]},
+    {"id": "top_up", "label": "How much do I top up?", "covers": ["da.skillsfuture_top_up"]},
+    {"id": "mid_career", "label": "Can I use Mid-Career credit?", "covers": ["da.mid_career"]},
+    {"id": "utap", "label": "NTUC UTAP support", "covers": ["da.utap", "fd.utap"]},
+    {"id": "paynow", "label": "Paying by PayNow", "covers": ["da.paynow"]},
+    {"id": "hr_interview", "label": "How the HR interview works", "covers": ["da.hr_interview"]},
+    {"id": "how_to_register", "label": "What do I need to register?", "covers": ["da.enrollment_requirements"]},
+    {"id": "front_desk", "label": "Front Desk course details", "covers": ["fd.catalogue_facts"]},
+    {"id": "enrol", "label": "I'd like to enrol", "covers": []},
+    {"id": "staff", "label": "Talk to staff", "covers": []}
+  ],
+  "starter_suggestions": ["fees", "dates", "requirements", "jobs", "staff"],
+  "suggestion_order": ["content", "fees", "dates", "requirements", "jobs", "sfc_balance", "utap", "how_to_register", "front_desk", "enrol"]
+}

@@ -34,8 +34,8 @@ describe("MessageInput", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
     expect(onSend.mock.calls[0][0]).toBe("");
-    expect(onSend.mock.calls[0][2]).toBe(file);
-    expect(onSend.mock.calls[0][4]).toBe("skillsfuture");
+    expect(onSend.mock.calls[0][1]).toBe(file);
+    expect(onSend.mock.calls[0][3]).toBe("skillsfuture");
     await waitFor(() => expect(screen.queryByAltText("Payment screenshot preview")).toBeNull());
   });
 });

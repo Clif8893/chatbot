@@ -3,10 +3,13 @@
 import json
 import re
 from copy import deepcopy
-from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from difflib import get_close_matches
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from backend.services.reply_parsing import choice_position, referenced_position
 
 
 CATALOGUE_PATH = (
@@ -85,11 +88,32 @@ class CourseCatalogue:
 
     @property
     def course(self):
-        return self._data["course"]
+        return self._priced_course(self._data["course"])
 
     @property
     def courses(self):
-        return [self.course, *self._data.get("additional_courses", [])]
+        return [self.course, *(self._priced_course(course) for course in self._data.get("additional_courses", []))]
+
+    def _pricing_today(self):
+        return datetime.now(ZoneInfo("Asia/Singapore")).date()
+
+    def _priced_course(self, course):
+        expiry = course.get("fee", {}).get("qm_discount_expires_on")
+        if not expiry:
+            return course
+        course = deepcopy(course)
+        fee = course["fee"]
+        fee["qm_discount_active"] = self._pricing_today() <= date.fromisoformat(expiry)
+        if not fee["qm_discount_active"]:
+            fee["amount"] = fee["original_amount"]
+            fee["display"] = f"S${Decimal(str(fee['amount'])):g} nett"
+            ended = date.fromisoformat(expiry).strftime("%d %B %Y").lstrip("0")
+            fee["discount_terms"] = (
+                f"The 10% Q&M-funded discount ended on {ended} at 11:59 pm. "
+                "The standard fee applies to new enrolments. Previously recorded enrolment fees are unchanged. "
+                "SkillsFuture or UTAP funding is calculated against the standard fee after expiry."
+            )
+        return course
 
     @property
     def retired_course_ids(self):
@@ -97,7 +121,7 @@ class CourseCatalogue:
 
     def course_for(self, value):
         if isinstance(value, dict):
-            return value
+            return self._priced_course(value)
         supplied = str(value or "").casefold().strip()
         if supplied == "basic-dental-assisting":
             supplied = "dental-assisting-basic"
@@ -206,13 +230,9 @@ class CourseCatalogue:
         if re.fullmatch(r"(?:both|all)(?:\s+(?:of\s+the\s+)?courses?)?", text):
             return list(displayed[:2]), False, None, True
 
-        ordinal = re.fullmatch(
-            r"(?:the\s+)?(first|second|third)(?:\s+(?:course|option|one))?",
-            text,
-        )
-        if ordinal:
-            position = {"first": 1, "second": 2, "third": 3}[ordinal.group(1)]
-            if position <= len(displayed):
+        position = choice_position(text)
+        if position is not None:
+            if 1 <= position <= len(displayed):
                 return [displayed[position - 1]], False, None, True
             return [], False, "Please choose one of the displayed course numbers.", True
 
@@ -224,6 +244,27 @@ class CourseCatalogue:
             if any(course["id"] not in displayed_ids for course in selected):
                 return [], False, "Please choose only from the displayed courses.", True
             return selected, False, None, True
+
+        # "I'm interested in the 1st" or "the second one please". Checked after
+        # explicit selections, so "Course 1 twice" is still caught as a duplicate.
+        position = None if "?" in str(value or "") else referenced_position(text)
+        if position is not None:
+            if 1 <= position <= len(displayed):
+                return [displayed[position - 1]], False, None, True
+            return [], False, "Please choose one of the displayed course numbers.", True
+
+        # Short names such as "DA", "frontdesk", "assisting" or "basic
+        # certificate". A message with an amount or number ("SkillsFuture
+        # S$600") is not a course choice, even though fees identify courses.
+        words = [w for w in re.findall(r"[a-z0-9]+", text) if w not in _CHOICE_FILLER]
+        picked = None
+        if len(words) == 1 and words[0] in _CHOICE_WORDS:
+            picked = self.courses[_CHOICE_WORDS[words[0]] - 1]
+        elif not re.search(r"[$\d]", text):
+            mentioned = self.courses_mentioned(text)
+            picked = mentioned[0] if len(mentioned) == 1 else None
+        if isinstance(picked, dict) and picked["id"] in displayed_ids:
+            return [picked], False, None, True
 
         numeric_attempt = re.search(r"\b(?:course|option)\s*\d+\b", text) or re.fullmatch(
             r"\d+(?:\s*(?:,|and|&)\s*\d+)*", text
@@ -265,34 +306,6 @@ class CourseCatalogue:
             for index, course in enumerate(self.courses, start=1)
         )
 
-    def focused_course_reply(self, course_value, topic):
-        """Return one verified course fact without unrelated catalogue content."""
-        course = self.course_for(course_value)
-        if course is None:
-            return self.course_clarification_reply()
-        name = course["name"]
-        if topic == "fee":
-            return f"The {name} is {self.course_fee_display_for(course)}."
-        if topic == "time":
-            duration = course.get("duration", "the scheduled training period")
-            training_time = course.get("training_time")
-            if not training_time:
-                return (
-                    f"The {name} runs for {duration.casefold()}. "
-                    "The training hours have not been confirmed; our team will need to confirm them for you."
-                )
-            return f"The {name} runs from {training_time} ({duration})."
-        if topic == "venue":
-            return course.get("venue", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
-        if topic == "paynow":
-            return course.get("paynow", {}).get("customer_reply") or self._data["reply_style"]["staff_confirmation_message"]
-        if topic == "payment":
-            options = course.get("payment_options", [])
-            if options:
-                return f"Payment options for {name}: " + "; ".join(options) + "."
-            return self._data["reply_style"]["staff_confirmation_message"]
-        return self.course_overview_reply(course)
-
     def course_choice_prompt(self, question):
         """Ask which course a button or menu choice is about."""
         return f"{question}\n\n{self.course_choices_without_fees()}"
@@ -325,77 +338,6 @@ class CourseCatalogue:
         """With two courses, the one that is not `course`."""
         others = [item for item in self.courses if course is None or item["id"] != course["id"]]
         return others[0] if course is not None and len(others) == 1 else None
-
-    def topics_in_reply(self, reply):
-        """FAQ topics an earlier assistant reply answered, in reply order.
-
-        Replies are rendered from the approved answers, so a topic is found when
-        one of its answers (for any course, or for all courses) appears verbatim.
-        """
-        text = str(reply or "")
-        spans = []
-        if "📅 Available Intake Dates" in text:
-            start = text.index("📅 Available Intake Dates")
-            spans.append((start, len(text), "course dates"))
-        for item in self._data["faqs"]:
-            candidates = [item.get("answer"), *(item.get("course_answers") or {}).values()]
-            matches = [
-                (text.index(rendered), text.index(rendered) + len(rendered))
-                for rendered in (
-                    self._render_intake_placeholders(candidate or "").strip()
-                    for candidate in candidates
-                )
-                if rendered and rendered in text
-            ]
-            if matches:
-                start, end = max(matches, key=lambda span: span[1] - span[0])
-                spans.append((start, end, item["topic"]))
-        # The introduction quotes the fee sentence; a match inside a larger one is part of it.
-        kept = [
-            span for span in spans
-            if not any(
-                other is not span and other[0] <= span[0] and span[1] <= other[1]
-                and (other[1] - other[0]) > (span[1] - span[0])
-                for other in spans
-            )
-        ]
-        return [topic for _, _, topic in sorted(kept)]
-
-    def is_course_follow_up(self, message):
-        """True for "what about the other course", "how about front desk?", "and the
-        dental assisting one?" or "same for course 2": only a course is given, so the
-        previous question is being asked again for that course."""
-        text = str(message or "").casefold()
-        words = re.findall(r"[a-z0-9]+", text)
-        remaining = [
-            w for w in words
-            if w not in _CHOICE_FILLER and w not in _COURSE_WORDS and w not in _FOLLOW_UP_WORDS
-        ]
-        refers_to_course = bool(
-            self.courses_mentioned(text)
-            or re.search(r"\b(?:other|another|both)\b", text)
-            or set(words) & _CHOICE_WORDS.keys()
-        )
-        return refers_to_course and not remaining
-
-    @staticmethod
-    def mentions_course_words(message):
-        """True for an attempted but unclear choice such as "dental" (both courses)."""
-        return bool(set(re.findall(r"[a-z0-9]+", str(message or "").casefold())) & _COURSE_WORDS)
-
-    @staticmethod
-    def is_bare_course_choice(message):
-        """True when a reply only picks a course; False for a new question such as
-        "what about job opportunities for front desk?"."""
-        words = re.findall(r"[a-z0-9]+", str(message or "").casefold())
-        remaining = [w for w in words if w not in _CHOICE_FILLER and w not in _COURSE_WORDS]
-        return len(remaining) <= 1 and "?" not in str(message or "").strip()[:-1]
-
-    def course_clarification_reply(self):
-        return "Which course would you like to check?\n\n" + "\n".join(
-            f"{index}. {course['name']}"
-            for index, course in enumerate(self.courses, start=1)
-        )
 
     def course_fee_for(self, value):
         course = self.course_for(value)
@@ -547,13 +489,16 @@ class CourseCatalogue:
             if course_value
             else self.selectable_intakes
         )
-        number = re.fullmatch(r"\d+", supplied)
-        if number:
-            position = int(number.group())
+        position = choice_position(supplied)
+        if position is not None:
             if 1 <= position <= len(available):
                 return available[position - 1], None
+            # "28th" is too large to be a list number, so read it as a day.
+            same_day = [item for item in available if position in intake_days(item)]
+            if len(same_day) == 1:
+                return same_day[0], None
             return None, self._intake_clarification(
-                "Please choose one of the available intake numbers."
+                "Please choose one of the available intake numbers.", course_value
             )
 
         ordinal = re.search(
@@ -587,51 +532,63 @@ class CourseCatalogue:
         unique = {item["id"]: item for item in matches}
         if len(unique) > 1:
             return None, self._intake_clarification(
-                "That choice could refer to more than one intake."
+                "That choice could refer to more than one intake.", course_value
             )
         if len(unique) == 1:
             selected = next(iter(unique.values()))
             if selected["status"] == "closed":
                 return None, self._intake_clarification(
-                    f"The {selected['display_date']} intake is closed."
+                    f"The {selected['display_date']} intake is closed.", course_value
                 )
             if selected["status"] == "full":
                 return None, self._intake_clarification(
-                    f"The {selected['display_date']} intake is full."
+                    f"The {selected['display_date']} intake is full.", course_value
                 )
             if selected["status"] == "cancelled":
                 return None, self._intake_clarification(
-                    f"The {selected['display_date']} intake is cancelled."
+                    f"The {selected['display_date']} intake is cancelled.", course_value
                 )
             if selected["status"] == "historical":
                 return None, self._intake_clarification(
-                    f"The {selected['display_date']} intake has already started."
+                    f"The {selected['display_date']} intake has already started.", course_value
                 )
             if selected["status"] != "open":
                 return None, self._intake_clarification(
-                    f"The {selected['display_date']} intake is unavailable."
+                    f"The {selected['display_date']} intake is unavailable.", course_value
                 )
             return selected, None
         return None, self._intake_clarification(
-            "That date is not one of the available intakes."
+            "That date is not one of the available intakes.", course_value
         )
 
     def _natural_intake_matches(self, supplied, intakes=None):
-        month_names = (
-            "january", "february", "march", "april", "may", "june",
-            "july", "august", "september", "october", "november", "december",
-        )
+        # Full or abbreviated month names: "28 November", "nov 28", "28th Nov".
         mentioned_months = {
-            index for index, name in enumerate(month_names, start=1) if name in supplied
+            index
+            for index, name in enumerate(_MONTH_PATTERNS, start=1)
+            if re.search(rf"\b{name}\b", supplied)
         }
         mentioned_types = {
             kind for kind in ("weekend", "weekday") if kind in supplied
         }
+        day = None
+        # Numeric day/month such as "28/11", "28.11.2026" or "28-11-2026".
+        # A bare "28-29" is a day range, not a month, so dashes need a year.
+        numeric = re.search(
+            r"\b([0-3]?\d)(?:[/.]([01]?\d)(?:[/.](\d{2,4}))?|-([01]?\d)-(\d{2,4}))\b",
+            supplied,
+        )
+        if numeric and not mentioned_months:
+            month = int(numeric.group(2) or numeric.group(4))
+            if 1 <= month <= 12:
+                mentioned_months = {month}
+                day = int(numeric.group(1))
         if not mentioned_months and not mentioned_types:
             return []
-        day_match = re.search(r"\b([0-3]?\d)(?:st|nd|rd|th)?\b", supplied)
+        if day is None:
+            day_match = re.search(r"\b([0-3]?\d)(?:st|nd|rd|th)?\b", supplied)
+            day = int(day_match.group(1)) if day_match else None
         year_match = re.search(r"\b(20\d{2})\b", supplied)
-        day = int(day_match.group(1)) if day_match else None
         year = int(year_match.group(1)) if year_match else None
         matches = []
         for item in intakes or self.intakes:
@@ -641,17 +598,23 @@ class CourseCatalogue:
             # "weekend" matches an intake labelled "Weekends" (and "weekday" -> "Weekdays").
             if mentioned_types and item["intake_type"].casefold().rstrip("s") not in mentioned_types:
                 continue
-            if day is not None and start.day != day:
+            # Either day of a two-day intake identifies it ("29 Nov" -> 28–29 Nov).
+            if day is not None and day not in intake_days(item):
                 continue
             if year is not None and start.year != year:
                 continue
             matches.append(item)
         return matches
 
-    def _intake_clarification(self, reason):
-        if not self.selectable_intakes:
+    def _intake_clarification(self, reason, course_value=None):
+        available = (
+            self.selectable_intakes_for(course_value)
+            if course_value
+            else self.selectable_intakes
+        )
+        if not available:
             return f"{reason} No open intake is currently available. Staff confirmation is required."
-        return f"{reason}\n\nAvailable choices:\n{self.intake_choices()}"
+        return f"{reason}\n\nAvailable choices:\n{self.intake_choices(course_value)}"
 
     def _validate_intakes(self):
         ids = set()
@@ -709,32 +672,6 @@ class CourseCatalogue:
     def staff_confirmation_message(self):
         return self._data["reply_style"]["staff_confirmation_message"]
 
-    def unanswered_reply(self, subject):
-        """"No confirmed information" framed around what was asked.
-
-        The subject only names the question ("parking at the training venue"); one
-        carrying facts, numbers, links or long text is discarded for the generic reply.
-        """
-        cleaned = " ".join(str(subject or "").split()).strip(" .?!:;,'\"")
-        template = self._data["reply_style"].get("unanswered_template")
-        if (
-            not template
-            or not cleaned
-            or len(cleaned) > 80
-            or len(cleaned.split()) > 12
-            or re.search(r"[\d$@<>{}]|https?:|www\.|\b(?:yes|no|guarantee\w*)\b", cleaned, re.I)
-        ):
-            return self.staff_confirmation_message
-        return template.format(subject=cleaned)
-
-    @property
-    def venue_customer_reply(self):
-        return self.course["venue"]["customer_reply"]
-
-    @property
-    def venue_confirmation_required(self):
-        return self.course["venue"]["confirmation_required"]
-
     @property
     def payment_question(self):
         return self.course.get("enrollment", {}).get("payment_question", "")
@@ -770,15 +707,8 @@ class CourseCatalogue:
     def enrollment_faq_resume_prompt(self):
         return self.enrollment_templates["faq_resume"]
 
-    @property
-    def lead_nurturing(self):
-        """Staff-editable Module A wording: welcome menu, opt-out and follow-ups."""
-        return self._data.get("lead_nurturing", {})
-
     def agent_context(self):
         context = deepcopy(self._data)
-        # Lead-nurturing wording is rendered deterministically, never by the FAQ agent.
-        context.pop("lead_nurturing", None)
         for course in [context["course"], *context.get("additional_courses", [])]:
             course_id = course.get("id")
             course["intakes"] = [
@@ -810,9 +740,9 @@ class CourseCatalogue:
             return True
         if _fuzzy_course_name(course["id"], text):
             return True
-        amount = course.get("fee", {}).get("amount")
-        if amount and re.search(rf"\$ ?{int(amount)}\b(?! ?(?:credit|sfc|skills))", text):
-            return True
+        for amount in (course.get("fee", {}).get("amount"), course.get("fee", {}).get("original_amount")):
+            if amount and re.search(rf"\$ ?{int(amount)}\b(?! ?(?:credit|sfc|skills))", text):
+                return True
         ordinals = "|".join(_ORDINAL_WORDS.get(position, ()))
         cardinal = _CARDINAL_WORDS.get(position, str(position))
         return bool(
@@ -825,129 +755,11 @@ class CourseCatalogue:
             or re.search(rf"#\s?{position}\b", raw)
         )
 
-    def focus_course(self, message):
-        """The single course a question is about, or None when it covers every course."""
-        mentioned = self.courses_mentioned(message)
-        return mentioned[0] if len(mentioned) == 1 else None
-
-    def approved_faq_reply(self, topics, course=None):
-        """Compose only staff-approved FAQ copy selected by the FAQ agent.
-
-        Without a course the general answer covers every course; with one, that
-        course's own answer is used when the topic differs between courses.
-        """
-        course = self.course_for(course) if course else None
-        entries = {item["topic"].casefold(): item for item in self._data["faqs"]}
-        selected = []
-        for topic in topics or []:
-            normalized_topic = str(topic).strip().casefold()
-            if normalized_topic == "course dates":
-                answer = self._course_dates_reply(course)
-            else:
-                entry = entries.get(normalized_topic) or {}
-                course_answers = entry.get("course_answers") or {}
-                answer = (course_answers.get(course["id"]) if course else None) or entry.get("answer")
-                answer = self._render_intake_placeholders(answer)
-            if answer and answer not in selected:
-                selected.append(answer)
-        return "\n\n".join(selected) if selected else self.staff_confirmation_message
-
-    def course_overview_reply(self, course_value):
-        course = self.course_for(course_value)
-        if not course:
-            return self.staff_confirmation_message
-        lines = [f"📚 {course['name']}", ""]
-        if course.get("overview"):
-            lines.extend([course["overview"], ""])
-        lines += [
-            f"- Course fee: {course['fee']['display']}",
-            f"- Duration: {course['duration']}",
-        ]
-        if course.get("training_time"):
-            lines.append(f"- Training hours: {course['training_time']}")
-        else:
-            lines.append("- Training hours: Awaiting staff confirmation")
-        intakes = self.selectable_intakes_for(course["id"])
-        if intakes:
-            lines.append(
-                "- Upcoming intakes: "
-                + "; ".join(
-                    f"{item['display_date']} — {item['intake_type']}"
-                    for item in intakes
-                )
-            )
-        lines.append(
-            "- Venue: "
-            + course.get("venue", {}).get(
-                "customer_reply", self.staff_confirmation_message
-            )
-        )
-        return "\n".join(lines)
-
-    def _render_intake_placeholders(self, answer):
-        """Fill "{intakes:<course id>}" with that course's open intakes, template style."""
-        if not answer:
-            return answer
-
-        def bullets(match):
-            intakes = self.selectable_intakes_for(match.group(1))
-            if not intakes:
-                return self.no_intakes_message
-            return "\n".join(
-                f"• {item['display_date']} ({item['intake_type']})" for item in intakes
-            )
-
-        return re.sub(r"\{intakes:([a-z0-9-]+)\}", bullets, answer)
-
-    def _course_dates_reply(self, course=None):
-        courses = [course] if course else self.courses
-        if not any(self.selectable_intakes_for(item["id"]) for item in courses):
-            return self.no_intakes_message
-        sections = ["📅 Available Intake Dates"]
-        for course in courses:
-            sections.extend(["", course["name"]])
-            sections.extend(
-                f"{index}. {item['display_date']} — {item['intake_type']}"
-                for index, item in enumerate(
-                    self.selectable_intakes_for(course["id"]), start=1
-                )
-            )
-        return "\n".join(sections)
-
-    def ground_faq_answer(self, answer):
-        """Reject high-risk numeric claims that are absent from approved content."""
-        candidate = (answer or "").strip()
-        if not candidate:
-            return self.staff_confirmation_message
-
-        approved_content = self.agent_context()
-        allowed_money = {
-            amount
-            for amount in (_money_value(match) for match in MONEY_PATTERN.findall(approved_content))
-            if amount is not None
-        }
-        if self.course_fee is not None:
-            allowed_money.add(self.course_fee)
-        claimed_money = {
-            amount
-            for amount in (_money_value(match) for match in MONEY_PATTERN.findall(candidate))
-            if amount is not None
-        }
-        if not claimed_money.issubset(allowed_money):
-            return self.staff_confirmation_message
-
-        approved_uens = {value.upper() for value in UEN_PATTERN.findall(approved_content)}
-        claimed_uens = {value.upper() for value in UEN_PATTERN.findall(candidate)}
-        if not claimed_uens.issubset(approved_uens):
-            return self.staff_confirmation_message
-
-        if not self.has_intake_dates and CALENDAR_DATE_PATTERN.search(candidate):
-            return self.staff_confirmation_message
-
-        return candidate
-
     def public_summary(self):
-        return deepcopy(self._data)
+        summary = deepcopy(self._data)
+        summary["course"] = deepcopy(self.course)
+        summary["additional_courses"] = deepcopy(self.courses[1:])
+        return summary
 
 
 def _fuzzy_course_name(course_id, text):
@@ -969,11 +781,17 @@ def _fuzzy_course_name(course_id, text):
     return False
 
 
-def _money_value(value):
-    try:
-        return Decimal(value.replace(",", "")).quantize(Decimal("0.01"))
-    except (InvalidOperation, AttributeError):
-        return None
+_MONTH_PATTERNS = (
+    "jan(?:uary)?", "feb(?:ruary)?", "mar(?:ch)?", "apr(?:il)?", "may", "june?",
+    "july?", "aug(?:ust)?", "sept?(?:ember)?", "oct(?:ober)?", "nov(?:ember)?",
+    "dec(?:ember)?",
+)
+
+
+def intake_days(item):
+    start = date.fromisoformat(item["start_date"])
+    end = date.fromisoformat(item.get("end_date") or item["start_date"])
+    return {start.day, end.day}
 
 
 def _normalise_intake_text(value):

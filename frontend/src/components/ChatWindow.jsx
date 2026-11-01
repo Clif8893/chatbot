@@ -1,13 +1,13 @@
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 
 import MessageBubble from "./MessageBubble.jsx";
-import QuickActions from "./QuickActions.jsx";
+import QuickReplies from "./QuickReplies.jsx";
 
 export default function ChatWindow({
   messages,
   isLoading,
-  quickActions,
-  onQuickAction,
+  quickReplies,
+  onQuickReply,
 }) {
   const latestMessage = useRef(null);
 
@@ -40,8 +40,8 @@ export default function ChatWindow({
         </div>
       )}
 
-      {!isLoading && quickActions.length > 0 && (
-        <QuickActions actions={quickActions} onSelect={onQuickAction} />
+      {!isLoading && quickReplies.length > 0 && (
+        <QuickReplies replies={quickReplies} onSelect={onQuickReply} />
       )}
 
       <div ref={latestMessage} />

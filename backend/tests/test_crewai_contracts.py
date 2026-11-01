@@ -7,9 +7,9 @@ from crewai import Agent, Task
 from pydantic import ValidationError
 
 from backend.agents.enrollment_agent import build_enrollment_agent
-from backend.agents.faq_agent import build_faq_agent
+from backend.agents.enquiry_agent import build_enquiry_agent
 from backend.agents.intent_classifier import build_intent_classifier
-from backend.agents.schemas import EnrollmentExtraction, FAQAnswer, IntentClassification
+from backend.agents.schemas import EnquiryTurn, EnrollmentExtraction, IntentClassification
 from backend.app import create_app
 from backend.services.crewai_service import CrewAIService
 from backend.tests.conftest import authenticated_client, send
@@ -22,7 +22,7 @@ def test_all_three_production_agents_are_crewai_agents():
     )
     agents = (
         build_intent_classifier(service.llm),
-        build_faq_agent(service.llm),
+        build_enquiry_agent(service.enquiry_llm),
         build_enrollment_agent(service.llm),
     )
     assert all(isinstance(agent, Agent) for agent in agents)
@@ -59,7 +59,7 @@ def test_each_runtime_operation_builds_task_and_crew_then_calls_kickoff(monkeypa
                 IntentClassification: IntentClassification(
                     intent="faq", confidence=0.99, short_reason="Question"
                 ),
-                FAQAnswer: FAQAnswer(answer="Approved answer"),
+                EnquiryTurn: EnquiryTurn(reply="Approved answer", response_type="small_talk"),
                 EnrollmentExtraction: EnrollmentExtraction(),
             }
             return SimpleNamespace(
@@ -70,7 +70,13 @@ def test_each_runtime_operation_builds_task_and_crew_then_calls_kickoff(monkeypa
     service = CrewAIService(api_key="synthetic-test-key", model="gpt-5-mini")
 
     service.classify("What is the fee?", "", None, None)
-    service.answer_faq("What is the fee?", "", "{}")
+    service.converse_enquiry(
+        message="What is the fee?",
+        conversation="",
+        profile="",
+        prior_conversations="",
+        approved_content="",
+    )
     service.extract_enrollment("Please register me", "", {})
 
     assert len(recorded_crews) == 3
@@ -81,7 +87,7 @@ def test_each_runtime_operation_builds_task_and_crew_then_calls_kickoff(monkeypa
     assert all(crew.kickoff_calls == 1 for crew in recorded_crews)
     assert [crew.tasks[0].output_pydantic for crew in recorded_crews] == [
         IntentClassification,
-        FAQAnswer,
+        EnquiryTurn,
         EnrollmentExtraction,
     ]
 
@@ -116,9 +122,10 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
                     confidence=0.99,
                     short_reason="Mocked provider output through the production path.",
                 ),
-                FAQAnswer: FAQAnswer(
-                    answer="Approved fee answer",
-                    matched_topics=["course fee and value"],
+                EnquiryTurn: EnquiryTurn(
+                    reply="Approved UTAP answer",
+                    response_type="grounded_answer",
+                    kb_entry_ids=["da.utap"],
                 ),
                 EnrollmentExtraction: EnrollmentExtraction(),
             }
@@ -156,7 +163,7 @@ def test_chat_endpoint_executes_real_crewai_service_path_for_all_three_agents(
     schemas = [crew.task.output_pydantic for crew in recorded]
     assert schemas == [
         IntentClassification,
-        FAQAnswer,
+        EnquiryTurn,
         IntentClassification,
         EnrollmentExtraction,
     ]

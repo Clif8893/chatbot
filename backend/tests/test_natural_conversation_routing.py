@@ -22,13 +22,14 @@ def test_natural_faq_reaches_crewai_before_grounded_answer(
     payload = send(client, conversation_id, "Why is the course expensive?").get_json()
 
     assert fake_ai.classify_calls[-1]["message"] == "Why is the course expensive?"
-    assert fake_ai.faq_calls[-1]["message"] == "Why is the course expensive?"
+    assert fake_ai.enquiry_calls[-1]["message"] == "Why is the course expensive?"
     assert payload["routing"] == {
         "intent": "faq",
         "confidence": 0.96,
         "handler": "crewai",
-        "agent": "faq",
-        "rule": "faq_grounded_answer",
+        "agent": "enquiry",
+        "rule": "enquiry_grounded_answer",
+        "response_type": "grounded_answer",
     }
     assert "course fee" in payload["message"]["content"].casefold()
 
@@ -68,7 +69,7 @@ def test_faq_interruption_preserves_pending_enrollment(
     payload = send(client, conversation_id, "Why is the course expensive?").get_json()
 
     assert payload["routing"]["intent"] == "faq"
-    assert fake_ai.faq_calls
+    assert fake_ai.enquiry_calls
     with app.app_context():
         conversation = db.session.get(Conversation, conversation_id)
         assert conversation.pending_intake_options == before
@@ -115,9 +116,113 @@ def test_course_comparison_uses_only_approved_facts(
 
     assert fake_ai.classify_calls
     assert payload["routing"]["intent"] == "course_comparison"
-    assert payload["routing"]["rule"] == "grounded_course_comparison"
+    assert payload["routing"]["rule"] == "enquiry_grounded_answer"
     assert "GCE 'N' Levels" in payload["message"]["content"]
     assert "best for beginners" not in payload["message"]["content"].casefold()
+
+
+def test_question_labelled_interest_is_answered_before_offering_enrollment(
+    client, conversation_id, fake_ai
+):
+    original = fake_ai.classify
+
+    def over_eager(**kwargs):
+        result = original(**kwargs)
+        if "top up" in kwargs["message"]:
+            result.intent = "enrollment_interest"
+        return result
+
+    fake_ai.classify = over_eager
+    payload = send(
+        client, conversation_id, "How much would I need to top up for dental assisting?"
+    ).get_json()
+    assert payload["routing"]["agent"] == "enquiry"
+    assert "Would you like me to begin your enrollment" not in payload["message"]["content"]
+
+
+def test_greeting_labelled_interest_and_pause_without_a_draft_go_to_module_a(
+    client, conversation_id, fake_ai
+):
+    original = fake_ai.classify
+
+    def confused(**kwargs):
+        result = original(**kwargs)
+        if kwargs["message"] == "Hi again!":
+            result.intent = "enrollment_interest"
+        if kwargs["message"] == "hmm":
+            result.intent = "pause_workflow"
+        return result
+
+    fake_ai.classify = confused
+    greeting = send(client, conversation_id, "Hi again!").get_json()
+    assert greeting["routing"]["agent"] == "enquiry"
+    hesitation = send(client, conversation_id, "hmm").get_json()
+    assert hesitation["routing"]["agent"] == "enquiry"
+
+
+def test_frustration_labelled_pause_during_enrollment_gets_a_module_a_reply(
+    client, conversation_id, fake_ai
+):
+    _reach_intake_menu(client, conversation_id)
+    original = fake_ai.classify
+
+    def as_pause(**kwargs):
+        result = original(**kwargs)
+        if "annoying" in kwargs["message"]:
+            result.intent = "pause_workflow"
+        return result
+
+    fake_ai.classify = as_pause
+    payload = send(client, conversation_id, "ugh why so many questions, so annoying").get_json()
+    assert payload["routing"]["agent"] == "enquiry"
+    assert "continue where you left off" in payload["message"]["content"]
+    assert payload["enrollment"]["status"] == "collecting"
+
+    # A real request to pause still gets Module B's pause reply.
+    paused = send(client, conversation_id, "I want to continue later.").get_json()
+    assert paused["routing"]["rule"] == "pause_preserve_pending_state"
+
+
+def test_stated_credit_is_answered_and_remembered_whichever_module_replies(
+    app, client, conversation_id, fake_ai
+):
+    from backend.models import Conversation
+    from backend.services.enquiry.memory_service import MemoryService
+
+    original = fake_ai.classify
+
+    def as_interest(**kwargs):
+        result = original(**kwargs)
+        if "credits" in kwargs["message"]:
+            result.intent = "enrollment_interest"
+        return result
+
+    fake_ai.classify = as_interest
+    payload = send(client, conversation_id, "I have $500 in SkillsFuture credits").get_json()
+    assert payload["routing"]["agent"] == "enquiry"
+    assert "Would you like me to begin your enrollment" not in payload["message"]["content"]
+
+    # Even a Module B turn (an enrollment answer) remembers a stated balance.
+    other = client.post("/api/conversations").get_json()["conversation_id"]
+    send(client, other, "I want to enrol in Dental Assisting.")
+    send(client, other, "1")
+    send(client, other, "My full name is Test Student and I have $350 SkillsFuture credits")
+    with app.app_context():
+        conversation = db.session.get(Conversation, other)
+        profile = MemoryService().build_context(conversation, [], "").profile
+        assert profile["sfc_balance_stated"][0]["value"] == "S$350"
+
+
+def test_registration_question_naming_a_course_is_not_a_course_selection(
+    client, conversation_id
+):
+    payload = send(
+        client,
+        conversation_id,
+        "What details will you need from me to register for Dental Assisting?",
+    ).get_json()
+    assert payload["routing"]["rule"] != "canonical_course_selection"
+    assert payload["enrollment"]["status"] is None
 
 
 def test_casual_and_general_questions_do_not_create_staff_escalations(
@@ -128,7 +233,7 @@ def test_casual_and_general_questions_do_not_create_staff_escalations(
 
     assert casual["routing"]["intent"] == "small_talk"
     assert general["routing"]["intent"] == "unsupported_general_question"
-    assert general["routing"]["rule"] == "unsupported_general_boundary"
+    assert general["routing"]["rule"] == "enquiry_general_knowledge"
     with app.app_context():
         assert StaffEscalation.query.count() == 0
 
@@ -141,7 +246,7 @@ def test_unsupported_company_question_uses_grounded_staff_fallback(
     ).get_json()
 
     assert payload["routing"]["intent"] == "faq"
-    assert "team will need to confirm" in payload["message"]["content"].casefold()
+    assert "don't have confirmed information" in payload["message"]["content"].casefold()
     with app.app_context():
         assert StaffEscalation.query.filter_by(
             conversation_id=conversation_id, category="unanswered_question"
@@ -176,7 +281,7 @@ def test_exact_pending_confirmation_never_calls_the_llm(
     assert ready["enrollment"]["status"] == "awaiting_confirmation"
     calls_before = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
 
@@ -184,7 +289,7 @@ def test_exact_pending_confirmation_never_calls_the_llm(
 
     assert (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     ) == calls_before
     assert confirmed["enrollment"]["status"] == "confirmed"
@@ -239,7 +344,8 @@ def test_bare_displayed_date_is_understood_but_date_question_is_not_consent(
     send(client, conversation_id, "Dental Assisting dates please")
 
     question = send(client, conversation_id, "Is 18 November still available?").get_json()
-    assert question["routing"]["intent"] == "faq"
+    # Answered as an enquiry, not taken as consent to enrol.
+    assert question["routing"]["agent"] == "enquiry"
     assert "Would you like me to begin your enrollment" not in question["message"]["content"]
 
     selected = send(client, conversation_id, "18 November").get_json()

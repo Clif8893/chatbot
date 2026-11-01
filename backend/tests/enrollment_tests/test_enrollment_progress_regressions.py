@@ -71,11 +71,12 @@ def test_approved_intakes_remain_available_when_demo_flag_is_disabled(tmp_path, 
         client.post("/api/conversations").get_json()["conversation_id"],
         "What intake dates are available?",
     ).get_json()
-    assert "Available Intake Dates" in response["message"]["content"]
+    assert "Upcoming intakes" in response["message"]["content"]
     assert "18–19 November 2026" in response["message"]["content"]
     assert "2 December 2026" in response["message"]["content"]
     assert len(fake_ai.classify_calls) == 1
-    assert fake_ai.faq_calls == []
+    # Module A answers dates from the live catalogue in one enquiry call.
+    assert len(fake_ai.enquiry_calls) == 1
 
 
 def test_database_backed_intake_query_lists_all_approved_choices(tmp_path, fake_ai):
@@ -87,17 +88,17 @@ def test_database_backed_intake_query_lists_all_approved_choices(tmp_path, fake_
         "Which weekend dates are available?",
     ).get_json()
     content = response["message"]["content"]
-    assert "Available Intake Dates" in content
-    assert "18–19 November 2026 — Weekdays" in content
-    assert "28–29 November 2026 — Weekends" in content
-    assert "16–17 December 2026 — Weekdays" in content
-    assert "2 December 2026 — Weekday" in content
-    assert "9 January 2027 — Weekend" in content
-    assert "3 February 2027 — Weekday" in content
-    assert "— Open" not in content
+    assert "Upcoming intakes" in content
+    assert "18–19 November 2026 (Weekdays)" in content
+    assert "28–29 November 2026 (Weekends)" in content
+    assert "16–17 December 2026 (Weekdays)" in content
+    assert "2 December 2026 (Weekday)" in content
+    assert "9 January 2027 (Weekend)" in content
+    assert "3 February 2027 (Weekday)" in content
+    assert "Open" not in content
     assert "dates are being updated" not in content
     assert len(fake_ai.classify_calls) == 1
-    assert fake_ai.faq_calls == []
+    assert len(fake_ai.enquiry_calls) == 1
     assert fake_ai.enrollment_calls == []
 
 
@@ -184,7 +185,7 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_extraction(tm
     client = authenticated_client(app)
     conversation_id = prepare_progress_draft(client)
     calls_before = (
-        len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls)
+        len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls)
     )
     response = send(
         client, conversation_id, "What information have I already provided?"
@@ -205,7 +206,7 @@ def test_progress_reply_uses_database_state_and_masks_nric_without_extraction(tm
     assert "already recorded" not in content
     assert "confirmed information" not in content
     assert (
-        len(fake_ai.classify_calls), len(fake_ai.faq_calls), len(fake_ai.enrollment_calls)
+        len(fake_ai.classify_calls), len(fake_ai.enquiry_calls), len(fake_ai.enrollment_calls)
     ) == (calls_before[0] + 1, calls_before[1], calls_before[2])
 
 
@@ -227,9 +228,9 @@ def test_progress_paraphrases_use_semantic_routing_and_deterministic_data(tmp_pa
     app = regression_app(tmp_path, fake_ai, name=f"progress-{abs(hash(question))}.db")
     client = authenticated_client(app)
     conversation_id = prepare_progress_draft(client)
-    before = len(fake_ai.classify_calls) + len(fake_ai.faq_calls) + len(fake_ai.enrollment_calls)
+    before = len(fake_ai.classify_calls) + len(fake_ai.enquiry_calls) + len(fake_ai.enrollment_calls)
     response = send(client, conversation_id, question).get_json()
-    after = len(fake_ai.classify_calls) + len(fake_ai.faq_calls) + len(fake_ai.enrollment_calls)
+    after = len(fake_ai.classify_calls) + len(fake_ai.enquiry_calls) + len(fake_ai.enrollment_calls)
     assert "current enrollment progress" in response["message"]["content"]
     assert after == before + 1
 

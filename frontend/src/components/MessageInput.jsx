@@ -31,7 +31,7 @@ export default function MessageInput({ onSend, isLoading, error, paymentProgress
     setValidationError("");
     submitting.current = true;
     if (attachment) {
-      onSend(trimmedMessage, null, attachment, crypto.randomUUID(), paymentType).then((success) => {
+      onSend(trimmedMessage, attachment, crypto.randomUUID(), paymentType).then((success) => {
         if (success) {
           setMessage("");
           setAttachment(null);

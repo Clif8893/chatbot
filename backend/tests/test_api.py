@@ -74,10 +74,10 @@ def test_messages_are_persisted_and_reloadable(client, conversation_id):
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert [message["sequence"] for message in messages] == [1, 2]
     assert [message["outcome_status"] for message in messages] == ["success", "success"]
-    assert all(message["agent_name"] == "faq_agent" for message in messages)
+    assert all(message["agent_name"] == "enquiry_agent" for message in messages)
     assert all(message["detected_intent"] == "faq" for message in messages)
     assert all(message["error_category"] is None for message in messages)
-    assert "2 consective days" in messages[1]["content"]
+    assert "Two consecutive training days" in messages[1]["content"]
 
 
 def test_previous_chat_list_is_owned_ordered_and_masks_nric(app, client):

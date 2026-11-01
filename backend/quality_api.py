@@ -22,7 +22,7 @@ def register_quality(app):
             return jsonify(error={'message': 'Review target not found.'}), 404
         if kind in {'document', 'payment'} and session['staff_role'] not in {'admin', 'accountant'}:
             return jsonify(error={'message': 'Accounts access required.'}), 403
-        if (kind == 'router' and (target.role != 'user' or not target.detected_intent)) or (kind == 'faq' and target.agent_name != 'faq_agent') or (kind == 'payment' and target.confirmed_by != 'vision_policy'):
+        if (kind == 'router' and (target.role != 'user' or not target.detected_intent)) or (kind == 'faq' and target.agent_name not in {'faq_agent', 'enquiry_agent'}) or (kind == 'payment' and target.confirmed_by != 'vision_policy'):
             return jsonify(error={'message': 'Target does not belong to this KPI sample.'}), 400
         row = db.session.execute(db.select(QualityReview).where(QualityReview.kind == kind, QualityReview.target_id == target_id)).scalar_one_or_none()
         if row is None:

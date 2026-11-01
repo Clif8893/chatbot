@@ -138,7 +138,7 @@ def test_confirmation_automatically_emails_generated_invoice(tmp_path, fake_ai):
     assert "test.student@example.com" not in str(email_status)
     calls_before = (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
     email_question = send(owner, conversation_id, "Which email did you send it to?")
@@ -146,7 +146,7 @@ def test_confirmation_automatically_emails_generated_invoice(tmp_path, fake_ai):
     assert "t***@example.com" in email_question.get_json()["message"]["content"]
     assert calls_before == (
         len(fake_ai.classify_calls),
-        len(fake_ai.faq_calls),
+        len(fake_ai.enquiry_calls),
         len(fake_ai.enrollment_calls),
     )
 

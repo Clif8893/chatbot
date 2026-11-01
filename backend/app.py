@@ -3,6 +3,7 @@
 from io import BytesIO
 from pathlib import Path
 import tempfile
+import time
 
 import click
 from flask import Flask, jsonify, request, send_file
@@ -11,14 +12,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.utils import secure_filename
 
 from backend.agents.schemas import AIConfigurationError, AIServiceError
-from backend.config import Config
+from backend.config import Config, enquiry_model_settings
 from backend.extensions import db
 from backend.models import (  # noqa: F401
     Conversation,
     EnrollmentDraft,
     Message,
+    utc_now,
     communications,
     finance,
+    memory,
     operations,
     quality,
 )
@@ -56,6 +59,10 @@ from backend.services.invoice_email_service import (
 from backend.services.master_invoice_service import MasterInvoiceService
 from backend.services.maintenance_service import MaintenanceService
 from backend.services.enrollment.intake_service import IntakeService
+from backend.services.enquiry.followup_composer import FollowupComposer
+from backend.services.enquiry.knowledge_base import KnowledgeBase
+from backend.services.enquiry.memory_service import MemoryService
+from backend.services.enquiry.suggestions import starter_labels
 from backend.services.operations_service import OperationsService
 from backend.services.privacy import mask_nrics_in_text
 from backend.services.security import (
@@ -224,6 +231,8 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
             catalogue.retired_course_ids,
         )
         catalogue.bind_intake_provider(intake_service.catalogue_items)
+    # Validated once at startup so a broken content edit fails before serving chats.
+    app.extensions["knowledge_base"] = KnowledgeBase(catalogue)
 
     app.register_blueprint(
         create_operations_blueprint(operations_service, staff_required)
@@ -241,12 +250,26 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
     def current_ai_service():
         service = app.extensions.get("agent_service")
         if service is None:
+            enquiry_model, enquiry_api_key = enquiry_model_settings(app.config)
             service = CrewAIService(
                 api_key=app.config["OPENAI_API_KEY"],
                 model=app.config["OPENAI_MODEL"],
+                enquiry_model=enquiry_model,
+                enquiry_api_key=enquiry_api_key,
             )
             app.extensions["agent_service"] = service
         return service
+
+    def starter_quick_replies(conversation):
+        """Opening buttons, without topics this participant covered in earlier chats."""
+        answered = MemoryService().build_context(conversation, [], "").answered_entry_ids
+        return starter_labels(app.extensions["knowledge_base"], answered)
+
+    # Reminders are personalised by Module A; an unconfigured model falls back
+    # to the approved templates instead of blocking the scheduler.
+    operations_service.followup_composer = FollowupComposer(
+        app.extensions["knowledge_base"], ai_factory=current_ai_service
+    )
 
     @app.post("/api/conversations")
     @participant_required
@@ -261,6 +284,8 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
                     "status": conversation.status,
                     "created_at": _iso_timestamp(conversation.created_at),
                     "demo_intakes_enabled": catalogue.enable_demo_intakes,
+                    # Starter menu shown before the participant's first message.
+                    "quick_replies": starter_quick_replies(conversation),
                 }
             ),
             201,
@@ -289,13 +314,14 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
             return _error_response(
                 "CONVERSATION_NOT_FOUND", "Conversation was not found.", 404
             )
+        messages = repository.all_messages(conversation)
         return jsonify(
             {
                 "conversation_id": conversation.id,
-                "messages": [
-                    serialize_message(message)
-                    for message in repository.all_messages(conversation)
-                ],
+                "messages": [serialize_message(message) for message in messages],
+                # Earlier turns' suggestions are not stored; an empty chat
+                # reopens with the starter menu.
+                "quick_replies": [] if messages else starter_quick_replies(conversation),
                 "active_intent": conversation.active_intent,
                 "enrollment": serialize_enrollment(
                     _conversation_enrollment(conversation), catalogue, conversation
@@ -333,14 +359,22 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
                 enrollment_resolver=enrollment_resolver,
                 validation_options=enrollment_validation_options,
                 operations_service=operations_service,
+                knowledge_base=app.extensions["knowledge_base"],
             )
-            return jsonify(
-                service.respond(
-                    conversation,
-                    payload["message"].strip(),
-                    quick_action=payload.get("quick_action"),
+            result = service.respond(
+                conversation,
+                payload["message"].strip(),
+                quick_action=payload.get("quick_action"),
+            )
+            # Web chat leads are reminded inside this conversation, like WhatsApp
+            # and email leads after each reply (REQ-03). A lead handed to the
+            # enrollment workflow ("qualified") is no longer nurtured.
+            if operations_service.lead_for(conversation.id).status != "qualified":
+                operations_service.awaiting_response(
+                    conversation.id, channel="web", recipient=conversation.id
                 )
-            )
+                db.session.commit()
+            return jsonify(result)
         except AIConfigurationError:
             db.session.rollback()
             _record_chat_failure(repository, conversation, "ai_configuration")
@@ -729,6 +763,46 @@ def create_app(test_config=None, ai_service=None, catalogue=None):
         """Process already queued invoice-email outbox records."""
         attempted = invoice_email_service.process(limit=limit)
         click.echo(f"Invoice email deliveries attempted: {attempted}")
+
+    @app.cli.command("automation-worker")
+    @click.option(
+        "--interval", default=300, show_default=True, type=click.IntRange(30, 86400),
+        help="Seconds between runs. Keep it well under 30 minutes so the first follow-up is on time.",
+    )
+    @click.option("--once", is_flag=True, help="Run the jobs once and exit.")
+    def automation_worker(interval, once):
+        """Run inbox, follow-up and delivery jobs on a timer (built-in scheduler)."""
+        config = app.config
+        email_ready = bool(
+            config.get("EMAIL_DELIVERY_ENABLED")
+            and config.get("SMTP_HOST")
+            and config.get("SMTP_USERNAME")
+            and config.get("SMTP_PASSWORD")
+            and (config.get("EMAIL_FROM_ADDRESS") or config.get("SMTP_FROM"))
+        )
+        whatsapp_ready = bool(
+            config.get("WHATSAPP_ACCESS_TOKEN") and config.get("WHATSAPP_PHONE_NUMBER_ID")
+        )
+        # A failed send is never retried automatically, so without a configured
+        # channel the worker only queues email/WhatsApp messages. Web chat
+        # reminders are posted in the conversation and need no channel.
+        dispatch = email_ready or whatsapp_ready
+        if not dispatch:
+            click.echo(
+                "No email or WhatsApp delivery is configured: those messages will be "
+                "queued but not sent. Web chat reminders are still posted in the chat.",
+                err=True,
+            )
+        while True:
+            try:
+                result = app.extensions["run_jobs"](dispatch=dispatch)
+                click.echo(f"{utc_now().isoformat(timespec='seconds')} {result}")
+            except Exception as error:  # Keep the worker alive; the next run retries.
+                db.session.rollback()
+                click.echo(f"Automation run failed: {error.__class__.__name__}: {error}", err=True)
+            if once:
+                return
+            time.sleep(interval)
 
     @app.cli.command("diagnose-invoice-email")
     def diagnose_invoice_email():

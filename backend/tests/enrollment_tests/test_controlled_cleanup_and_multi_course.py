@@ -61,7 +61,7 @@ def test_course_choice_and_infection_control_rules(tmp_path, fake_ai):
         draft = EnrollmentDraft.query.one()
         assert draft.friendly_reference.startswith("ENR-2026-")
         assert draft.course == "Certificate in Dental Clinic Front Desk Operations"
-        assert draft.course_fee == Decimal("450.00")
+        assert draft.course_fee == Decimal("405.00")
         assert draft.payment_method is None
         assert draft.skillsfuture_amount is None
         assert draft.paynow_amount is None

@@ -40,6 +40,24 @@ def _boolean_setting(name, default=False):
     return raw.strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def enquiry_model_settings(settings):
+    """Resolve the Module A model and key from a config mapping.
+
+    An empty ENQUIRY_MODEL uses the shared OpenAI model and key. A configured
+    model borrows OPENAI_API_KEY only when it is an OpenAI model, so a Claude
+    model such as ``anthropic/claude-sonnet-5-5`` needs its own ENQUIRY_API_KEY.
+    """
+    model = str(settings.get("ENQUIRY_MODEL") or "").strip()
+    api_key = str(settings.get("ENQUIRY_API_KEY") or "").strip()
+    openai_key = str(settings.get("OPENAI_API_KEY") or "").strip()
+    if not model:
+        return str(settings.get("OPENAI_MODEL") or "").strip(), api_key or openai_key
+    provider = model.split("/", 1)[0].casefold() if "/" in model else "openai"
+    if not api_key and provider == "openai":
+        api_key = openai_key
+    return model, api_key
+
+
 class Config:
     """Settings shared by local development and production deployments."""
 
@@ -47,6 +65,9 @@ class Config:
     PORT = int(os.getenv("FLASK_PORT", "5000"))
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip()
+    # Module A enquiry assistant; resolved with enquiry_model_settings().
+    ENQUIRY_MODEL = os.getenv("ENQUIRY_MODEL", "").strip()
+    ENQUIRY_API_KEY = os.getenv("ENQUIRY_API_KEY", "").strip()
     SQLALCHEMY_DATABASE_URI = _database_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     CONVERSATION_CONTEXT_MESSAGE_LIMIT = int(
@@ -120,9 +141,11 @@ class Config:
     AUTOMATION_API_TOKEN = os.getenv("AUTOMATION_API_TOKEN", "").strip()
     CONSENT_VERSION = os.getenv("CONSENT_VERSION", "2026-09")
     RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "365"))
+    # Hours after the last contact: 30 minutes, then 1 day and 2 days after
+    # the previous reminder (workflow deck, Step 1).
     FOLLOWUP_HOURS = tuple(
-        int(value)
-        for value in os.getenv("FOLLOWUP_HOURS", "48,96,144").split(",")
+        float(value)
+        for value in os.getenv("FOLLOWUP_HOURS", "0.5,24.5,72.5").split(",")
     )
     # False: leads who message first may receive reminders until they reply STOP.
     FOLLOWUP_REQUIRE_EXPLICIT_CONSENT = _boolean_setting(

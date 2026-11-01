@@ -16,6 +16,7 @@ class OutboundMessage(db.Model):
     body = db.Column(EncryptedText(), nullable=False)
     html_body = db.Column(EncryptedText())
     attachments = db.Column(EncryptedText(), default="[]")
+    quick_replies = db.Column(db.JSON, nullable=True)
     purpose = db.Column(db.String(128), index=True)
     email_type = db.Column(db.String(64), index=True)
     provider = db.Column(db.String(32))

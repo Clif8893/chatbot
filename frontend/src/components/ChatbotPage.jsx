@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import ChatHeader from "./ChatHeader.jsx";
 import ChatWindow from "./ChatWindow.jsx";
@@ -12,14 +12,7 @@ const welcomeMessage = {
   timestamp: new Date().toISOString(),
 };
 
-// The id tells the assistant a button was pressed, so it can ask which course
-// is meant when the conversation has not settled on one yet.
-const quickActions = [
-  { id: "about", label: "About the course", message: "Tell me about the course" },
-  { id: "fee", label: "Course fee", message: "How much is the course fee?" },
-  { id: "dates", label: "Available dates", message: "What course dates are available?" },
-  { id: "enrol", label: "Enroll now", message: "I’d like to enroll" },
-];
+const REMINDER_POLL_MS = 60_000;
 
 export function makeMessage(sender, text, timestamp = new Date().toISOString(), id, imageUrl, imageAlt, imageStatus) {
   return {
@@ -54,7 +47,8 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
   const storageKey = `qm-training-conversation-id:${userId}`;
   const [messages, setMessages] = useState([welcomeMessage]);
   const [conversationId, setConversationId] = useState("");
-  const [isEnrollmentStarted, setIsEnrollmentStarted] = useState(false);
+  // Suggestions from the assistant's latest reply (or the starter menu).
+  const [quickReplies, setQuickReplies] = useState([]);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [paymentProgress, setPaymentProgress] = useState(false);
@@ -62,6 +56,31 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
   const [previousChats, setPreviousChats] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const initializationStarted = useRef(false);
+  const busy = useRef(false);
+  busy.current = isLoading;
+
+  // Follow-up reminders are posted by the server while the chat is idle, so
+  // check for new messages periodically and show them without a refresh.
+  useEffect(() => {
+    if (!conversationId) return undefined;
+    const timer = setInterval(async () => {
+      if (busy.current || document.hidden) return;
+      try {
+        const history = await getConversationMessages(conversationId);
+        const stored = history.messages || [];
+        if (busy.current || !stored.length) return;
+        setMessages((current) => {
+          if (current.some((message) => message.id === stored[stored.length - 1].id)) return current;
+          // The greeting is shown by the page, not stored; keep it on screen.
+          const greeting = current[0]?.id === welcomeMessage.id ? [current[0]] : [];
+          return [...greeting, ...mapStoredMessages(stored)];
+        });
+      } catch {
+        // A missed check is retried on the next interval.
+      }
+    }, REMINDER_POLL_MS);
+    return () => clearInterval(timer);
+  }, [conversationId]);
 
   useEffect(() => {
     if (initializationStarted.current) return;
@@ -74,7 +93,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
           setConversationId(savedId);
           onConversationChange?.(savedId);
           setMessages(mapStoredMessages(history.messages));
-          setIsEnrollmentStarted(Boolean(history.enrollment?.status));
+          setQuickReplies(history.quick_replies || []);
           setIsDemoMode(Boolean(history.enrollment?.demo_intakes_enabled));
           await refreshConversations();
           return;
@@ -98,7 +117,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
       setConversationId(result.conversation_id);
       onConversationChange?.(result.conversation_id);
       setMessages([{ ...welcomeMessage, timestamp: new Date().toISOString() }]);
-      setIsEnrollmentStarted(false);
+      setQuickReplies(result.quick_replies || []);
       setIsDemoMode(Boolean(result.demo_intakes_enabled));
       setHistoryOpen(false);
       await refreshConversations();
@@ -128,7 +147,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
       setConversationId(selectedId);
       onConversationChange?.(selectedId);
       setMessages(mapStoredMessages(history.messages));
-      setIsEnrollmentStarted(Boolean(history.enrollment?.status));
+      setQuickReplies(history.quick_replies || []);
       setIsDemoMode(Boolean(history.enrollment?.demo_intakes_enabled));
       setHistoryOpen(false);
     } catch (requestError) {
@@ -138,12 +157,13 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
     }
   }
 
-  async function handleSend(message, quickAction, attachment, submissionId, paymentType = "paynow") {
+  async function handleSend(message, attachment, submissionId, paymentType = "paynow") {
     if (!conversationId) {
       setError("A chat could not be started. Please select New Chat and try again.");
       return false;
     }
     setError("");
+    setQuickReplies([]);
     setMessages((current) => [...current, makeMessage("user", attachment ? `${message || "Payment screenshot"} · Uploading…` : maskNricForDisplay(message))]);
     setIsLoading(true);
     if (attachment) setPaymentProgress(true);
@@ -154,7 +174,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
         await refreshConversations();
         return true;
       }
-      const response = await sendChatMessage(message, conversationId, quickAction);
+      const response = await sendChatMessage(message, conversationId);
       const reply = response.message;
       setMessages((current) => [...current, makeMessage(
         "bot",
@@ -165,7 +185,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
         reply.image_alt,
         reply.image_status,
       )]);
-      setIsEnrollmentStarted(Boolean(response.enrollment?.status));
+      setQuickReplies(response.quick_replies || []);
       setIsDemoMode(Boolean(response.enrollment?.demo_intakes_enabled));
       if (response.show_invoice_action || response.enrollment?.status === "confirmed") {
         onShowEnrollment?.();
@@ -200,7 +220,7 @@ export default function ChatbotPage({ userId, onConversationChange, onShowEnroll
           </li>)}</ul>}
       </section>}
     </div>
-    <ChatWindow messages={messages} isLoading={isLoading} quickActions={isEnrollmentStarted ? [] : quickActions} onQuickAction={handleSend} />
+    <ChatWindow messages={messages} isLoading={isLoading} quickReplies={quickReplies} onQuickReply={handleSend} />
     <MessageInput onSend={handleSend} isLoading={isLoading} error={error} paymentProgress={paymentProgress} />
   </main>;
 }
